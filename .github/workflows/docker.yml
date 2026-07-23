@@ -1,0 +1,38 @@
+name: build and publish docker image with llvm and odin for moo development
+
+on:
+  workflow_dispatch:
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: checkout repository
+        uses: actions/checkout@v6
+
+      - name: set up docker buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: log in to github container registry
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: build and publish docker image
+        uses: docker/build-push-action@v7
+        with:
+          context: ./docker
+          file: ./docker/file
+          push: true
+          tags: |
+            ghcr.io/aquaticcalf/moo:latest
+            ghcr.io/aquaticcalf/moo:${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
