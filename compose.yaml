@@ -1,0 +1,8 @@
+services:
+  moo:
+    image: ghcr.io/aquaticcalf/moo:latest
+    working_dir: /dev
+    volumes:
+      - .:/dev
+    stdin_open: true
+    tty: true
