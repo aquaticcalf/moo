@@ -5,6 +5,12 @@ param(
 
 $ErrorActionPreference = "Stop"
 
+$mooCacheDirectory = Join-Path $env:USERPROFILE ".moo"
+if (-not (Test-Path -LiteralPath $mooCacheDirectory)) {
+    New-Item -ItemType Directory -Path $mooCacheDirectory -Force | Out-Null
+}
+$env:MOO_CACHE_DIR = $mooCacheDirectory
+
 if (-not (Get-Command docker -ErrorAction SilentlyContinue)) {
     Write-Error "docker was not found in PATH. install and start Docker Desktop first."
     exit 1

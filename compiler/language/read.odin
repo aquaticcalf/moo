@@ -101,3 +101,12 @@ scan :: proc(source: string, diagnostics: ^Diagnostics) -> [dynamic]Token {
     append(&tokens, Token{kind = .Eof, span = Span{line = line, column = column}})
     return tokens
 }
+
+hash_source :: proc(source: string) -> u64 {
+    value_hash: u64 = 14695981039346656037
+    for value in source {
+        value_hash = value_hash ~ u64(value)
+        value_hash *= 1099511628211
+    }
+    return value_hash
+}

@@ -4,5 +4,8 @@ services:
     working_dir: /workspace
     volumes:
       - ..:/workspace
+      - type: bind
+        source: ${MOO_CACHE_DIR}
+        target: /root/.moo
     stdin_open: true
     tty: true

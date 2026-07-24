@@ -27,7 +27,7 @@ parse :: proc(source: string, path: string) -> Parse_Result {
         return Parse_Result{diagnostics = diagnostics}
     }
 
-    return Parse_Result{program = program, diagnostics = diagnostics, ok = true}
+    return Parse_Result{program = program, diagnostics = diagnostics, ok = true, source_hash = hash_source(source)}
 }
 
 parse_tokens :: proc(tokens: []Token, diagnostics: ^Diagnostics) -> Program {

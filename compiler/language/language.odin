@@ -43,6 +43,7 @@ Parse_Result :: struct {
     program: Program,
     diagnostics: Diagnostics,
     ok: bool,
+    source_hash: u64,
 }
 
 report :: proc(diagnostics: ^Diagnostics, span: Span, message: string) {

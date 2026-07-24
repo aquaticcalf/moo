@@ -10,6 +10,7 @@ print_usage :: proc() {
     fmt.println("  moo check file.moo")
     fmt.println("  moo build file.moo")
     fmt.println("  moo run file.moo")
+    fmt.println("  moo clean")
 }
 
 print_diagnostics :: proc(diagnostics: language.Diagnostics) {
@@ -41,6 +42,16 @@ run :: proc(args: []string) -> int {
         return 0
     }
 
+    if command == "clean" && len(args) == 1 {
+        cache_dir, message, ok := build.clean()
+        if !ok {
+            fmt.eprintf("%v\n", message)
+            return 1
+        }
+        fmt.printf("cleaned %v\n", cache_dir)
+        return 0
+    }
+
     if len(args) == 1 && (command == "check" || command == "build" || command == "run") {
         fmt.printfln("expected a filename after \"moo %s\"", command)
         return 1
@@ -63,7 +74,10 @@ run :: proc(args: []string) -> int {
         return 0
     }
 
-    result := build.compile(parsed.program, build.Build_Options{source_path = args[1]})
+    result := build.compile(parsed.program, build.Build_Options{
+        source_path = args[1],
+        source_hash = parsed.source_hash,
+    })
     print_process_output(result.stdout, result.stderr)
     if !result.ok {
         fmt.eprintf("%v\n", result.message)
@@ -71,7 +85,16 @@ run :: proc(args: []string) -> int {
     }
 
     if command == "build" {
-        fmt.printf("built %v\n", result.executable)
+        published, message, published_ok := build.publish(result, args[1])
+        if !published_ok {
+            fmt.eprintf("%v\n", message)
+            return 1
+        }
+        if result.cached {
+            fmt.printf("cached %v\n", published)
+        } else {
+            fmt.printf("built %v\n", published)
+        }
         return 0
     }
 
