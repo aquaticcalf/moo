@@ -37,6 +37,9 @@ word_kind :: proc(word: string) -> (Token_Kind, bool) {
     if word == "otherwise" {
         return .Keyword_Otherwise, true
     }
+    if word == "becomes" {
+        return .Keyword_Becomes, true
+    }
     return {}, false
 }
 

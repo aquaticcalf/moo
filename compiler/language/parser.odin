@@ -25,6 +25,9 @@ parse :: proc(source: string, path: string) -> Parse_Result {
     }
 
     program := parse_tokens(tokens[:], &diagnostics)
+    if !has_errors(&diagnostics) {
+        semantic_check(program, &diagnostics)
+    }
     if has_errors(&diagnostics) {
         destroy_program(&program)
         return Parse_Result{diagnostics = diagnostics}
@@ -65,8 +68,12 @@ parse_block :: proc(tokens: []Token, index: ^int, diagnostics: ^Diagnostics, stm
                 if !parse_variable_decl(tokens, index, diagnostics, stmts) {
                     return false
                 }
+            } else if index^ + 1 < len(tokens) && tokens[index^ + 1].kind == .Keyword_Becomes {
+                if !parse_variable_assign(tokens, index, diagnostics, stmts) {
+                    return false
+                }
             } else {
-                reportf(diagnostics, token.span, "expected 'show', 'if' or 'name is value'")
+                reportf(diagnostics, token.span, "expected 'show', 'if', 'name is value' or 'name becomes value'")
                 skip_to_line_end(tokens, index)
             }
         case .Keyword_Show:
@@ -105,6 +112,25 @@ parse_show :: proc(tokens: []Token, index: ^int, diagnostics: ^Diagnostics, stmt
 
     if index^ < len(tokens) && tokens[index^].kind != .Newline && tokens[index^].kind != .Eof && tokens[index^].kind != .Dedent {
         reportf(diagnostics, tokens[index^].span, "expected the line to end after show")
+        skip_to_line_end(tokens, index)
+    }
+    return true
+}
+
+// parse "name becomes expression"
+parse_variable_assign :: proc(tokens: []Token, index: ^int, diagnostics: ^Diagnostics, stmts: ^[dynamic]Stmt) -> bool {
+    token := tokens[index^]
+    index^ += 2
+
+    expression, ok := parse_expression(tokens, index, diagnostics)
+    if !ok {
+        skip_to_line_end(tokens, index)
+        return false
+    }
+    append(stmts, Variable_Assign{span = token.span, name = strings.clone(token.text), expr = expression})
+
+    if index^ < len(tokens) && tokens[index^].kind != .Newline && tokens[index^].kind != .Eof && tokens[index^].kind != .Dedent {
+        reportf(diagnostics, tokens[index^].span, "expected the line to end after reassignment")
         skip_to_line_end(tokens, index)
     }
     return true

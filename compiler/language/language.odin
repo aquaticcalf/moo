@@ -18,6 +18,7 @@ Token_Kind :: enum {
     Keyword_Is,
     Keyword_If,
     Keyword_Otherwise,
+    Keyword_Becomes,
     Identifier,
     Comparison,
     String,
@@ -115,6 +116,21 @@ Variable_Decl :: struct {
     expr: Expr,
 }
 
+// a reassignment using the friendly 'becomes' operator
+Variable_Assign :: struct {
+    span: Span,
+    name: string,
+    expr: Expr,
+}
+
+// inferred value kinds used by semantic checking
+Type :: enum {
+    Unknown,
+    Integer,
+    Boolean,
+    String,
+}
+
 // one "if condition:" branch with its indented body
 If_Block :: struct {
     span: Span,
@@ -131,6 +147,7 @@ If_Block :: struct {
 Stmt :: union {
     Show,
     Variable_Decl,
+    Variable_Assign,
     If_Block,
 }
 
@@ -207,6 +224,9 @@ destroy_stmts :: proc(stmts: ^[dynamic]Stmt) {
         case Show:
             destroy_expr(s.expr)
         case Variable_Decl:
+            destroy_expr(s.expr)
+            delete(s.name)
+        case Variable_Assign:
             destroy_expr(s.expr)
             delete(s.name)
         case If_Block:

@@ -131,6 +131,7 @@ collect_strings :: proc(stmts: []language.Stmt, string_lengths: ^[dynamic]int, b
             }
             collect_strings(s.else_body[:], string_lengths, builder)
         case language.Variable_Decl:
+        case language.Variable_Assign:
         }
     }
 }
@@ -184,6 +185,13 @@ emit_statements :: proc(builder: ^strings.Builder, stmts: []language.Stmt, state
     for stmt in stmts {
         switch s in stmt {
         case language.Variable_Decl:
+            value := emit_expr(builder, s.expr, &state.counter)
+            line(builder, fmt.aprintf(
+                "  store i32 %s, ptr @var.%s",
+                value,
+                sanitize(s.name),
+            ))
+        case language.Variable_Assign:
             value := emit_expr(builder, s.expr, &state.counter)
             line(builder, fmt.aprintf(
                 "  store i32 %s, ptr @var.%s",
