@@ -63,23 +63,32 @@ emit_program :: proc(program: language.Program) -> string {
     line(&builder, "declare i32 @printf(ptr, ...)")
     line(&builder, "")
 
-    // one constant for every string that gets shown
+    // a global slot for every variable, one constant for every string that gets shown
     string_lengths: [dynamic]int
-    for show in program.shows {
-        if literal, ok := show.expr.(language.Literal); ok && literal.is_string {
-            bytes := decode_string(literal.text)
-            append(&string_lengths, len(bytes))
-
-            write(&builder, fmt.aprintf(
-                "@.str.%d = private unnamed_addr constant [%d x i8] c\"",
-                len(string_lengths) - 1,
-                len(bytes),
-            ))
-            for value in bytes {
-                write_byte(&builder, value)
+    variable_names: [dynamic]string
+    for stmt in program.statements {
+        switch s in stmt {
+        case language.Variable_Decl:
+            if !slice_contains(variable_names[:], s.name) {
+                append(&variable_names, strings.clone(s.name))
+                line(&builder, fmt.aprintf("@var.%s = global i32 0", sanitize(s.name)))
             }
-            line(&builder, "\", align 1")
-            delete(bytes)
+        case language.Show:
+            if literal, ok := s.expr.(language.Literal); ok && literal.is_string {
+                bytes := decode_string(literal.text)
+                append(&string_lengths, len(bytes))
+
+                write(&builder, fmt.aprintf(
+                    "@.str.%d = private unnamed_addr constant [%d x i8] c\"",
+                    len(string_lengths) - 1,
+                    len(bytes),
+                ))
+                for value in bytes {
+                    write_byte(&builder, value)
+                }
+                line(&builder, "\", align 1")
+                delete(bytes)
+            }
         }
     }
 
@@ -91,26 +100,64 @@ emit_program :: proc(program: language.Program) -> string {
 
     counter := 0
     string_index := 0
-    for show in program.shows {
-        if literal, ok := show.expr.(language.Literal); ok && literal.is_string {
+    for stmt in program.statements {
+        switch s in stmt {
+        case language.Variable_Decl:
+            value := emit_expr(&builder, s.expr, &counter)
             line(&builder, fmt.aprintf(
-                "  %%show.%d = call i32 @puts(ptr getelementptr inbounds ([%d x i8], ptr @.str.%d, i64 0, i64 0))",
-                counter,
-                string_lengths[string_index],
-                string_index,
+                "  store i32 %s, ptr @var.%s",
+                value,
+                sanitize(s.name),
             ))
-            string_index += 1
-            counter += 1
-        } else {
-            value := emit_expr(&builder, show.expr, &counter)
-            line(&builder, fmt.aprintf("  %%show.%d = call i32 @printf(ptr @.fmt.int, i32 %s)", counter, value))
-            counter += 1
+        case language.Show:
+            if literal, ok := s.expr.(language.Literal); ok && literal.is_string {
+                line(&builder, fmt.aprintf(
+                    "  %%show.%d = call i32 @puts(ptr getelementptr inbounds ([%d x i8], ptr @.str.%d, i64 0, i64 0))",
+                    counter,
+                    string_lengths[string_index],
+                    string_index,
+                ))
+                string_index += 1
+                counter += 1
+            } else {
+                value := emit_expr(&builder, s.expr, &counter)
+                line(&builder, fmt.aprintf("  %%show.%d = call i32 @printf(ptr @.fmt.int, i32 %s)", counter, value))
+                counter += 1
+            }
         }
     }
     line(&builder, "  ret i32 0")
     line(&builder, "}")
 
     delete(string_lengths)
+    for name in variable_names {
+        delete(name)
+    }
+    delete(variable_names)
+    return strings.to_string(builder)
+}
+
+// does a slice contain the given value?
+slice_contains :: proc(slice: []string, value: string) -> bool {
+    for item in slice {
+        if item == value {
+            return true
+        }
+    }
+    return false
+}
+
+// make a name safe to use inside llvm identifiers
+sanitize :: proc(name: string) -> string {
+    builder: strings.Builder
+    strings.builder_init(&builder)
+    for c in name {
+        if (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') {
+            strings.write_byte(&builder, byte(c))
+        } else {
+            strings.write_byte(&builder, '_')
+        }
+    }
     return strings.to_string(builder)
 }
 
@@ -123,6 +170,11 @@ emit_expr :: proc(builder: ^strings.Builder, expr: language.Expr, counter: ^int)
             return "0"
         }
         return fmt.aprintf("%d", e.value)
+    case language.Variable:
+        name := fmt.aprintf("%%v.%d", counter^)
+        counter^ += 1
+        line(builder, fmt.aprintf("  %s = load i32, ptr @var.%s", name, sanitize(e.name)))
+        return name
     case language.Grouping:
         return emit_expr(builder, e.inner^, counter)
     case language.Binary:

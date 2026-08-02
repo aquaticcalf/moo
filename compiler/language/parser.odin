@@ -48,8 +48,33 @@ parse_tokens :: proc(tokens: []Token, diagnostics: ^Diagnostics) -> Program {
             break
         }
 
+        // a variable declaration: name is expression
+        if token.kind == .Identifier &&
+            index + 1 < len(tokens) &&
+            tokens[index + 1].kind == .Keyword_Is {
+            index += 2
+
+            expression, ok := parse_expression(tokens, &index, diagnostics)
+            if !ok {
+                for index < len(tokens) && tokens[index].kind != .Newline && tokens[index].kind != .Eof {
+                    index += 1
+                }
+                continue
+            }
+
+            append(&program.statements, Variable_Decl{span = token.span, name = strings.clone(token.text), expr = expression})
+
+            if index < len(tokens) && tokens[index].kind != .Newline && tokens[index].kind != .Eof {
+                reportf(diagnostics, tokens[index].span, "expected the line to end after assignment")
+                for index < len(tokens) && tokens[index].kind != .Newline && tokens[index].kind != .Eof {
+                    index += 1
+                }
+            }
+            continue
+        }
+
         if token.kind != .Keyword_Show {
-            reportf(diagnostics, token.span, "expected 'show'")
+            reportf(diagnostics, token.span, "expected 'show' or 'name is value'")
             index += 1
             continue
         }
@@ -63,7 +88,7 @@ parse_tokens :: proc(tokens: []Token, diagnostics: ^Diagnostics) -> Program {
             continue
         }
 
-        append(&program.shows, Show{span = token.span, expr = expression})
+        append(&program.statements, Show{span = token.span, expr = expression})
 
         if index < len(tokens) && tokens[index].kind != .Newline && tokens[index].kind != .Eof {
             reportf(diagnostics, tokens[index].span, "expected the line to end after show")
@@ -84,6 +109,9 @@ parse_primary :: proc(tokens: []Token, index: ^int, diagnostics: ^Diagnostics) -
 
     token := tokens[index^]
     #partial switch token.kind {
+    case .Identifier:
+        index^ += 1
+        return Variable{span = token.span, name = strings.clone(token.text)}, true
     case .Number:
         index^ += 1
         value, ok := strconv.parse_i64(token.text)

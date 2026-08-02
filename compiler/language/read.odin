@@ -59,8 +59,10 @@ scan :: proc(source: string, diagnostics: ^Diagnostics) -> [dynamic]Token {
             span := Span{line = line, column = start_column}
             if word == "show" {
                 append(&tokens, Token{kind = .Keyword_Show, text = word, span = span})
+            } else if word == "is" {
+                append(&tokens, Token{kind = .Keyword_Is, text = word, span = span})
             } else {
-                reportf(diagnostics, span, "unknown word '%s'", word)
+                append(&tokens, Token{kind = .Identifier, text = word, span = span})
             }
             continue
         }

@@ -13,6 +13,8 @@ Token_Kind :: enum {
     Eof,
     Newline,
     Keyword_Show,
+    Keyword_Is,
+    Identifier,
     String,
     Number,
     Plus,
@@ -38,9 +40,10 @@ Bin_Op :: enum {
     Div,
 }
 
-// every expression is one of these three
+// every expression is one of these four
 Expr :: union {
     Literal,
+    Variable,
     Binary,
     Grouping,
 }
@@ -51,6 +54,12 @@ Literal :: struct {
     value: i64,
     is_string: bool,
     text: string,
+}
+
+// a variable is a reference to a named value that was assigned with 'is'
+Variable :: struct {
+    span: Span,
+    name: string,
 }
 
 // a binary operation combines two expressions with an operator
@@ -73,9 +82,22 @@ Show :: struct {
     expr: Expr,
 }
 
-// a program is a collection of shows
+// a variable declaration or assignment using the 'is' operator
+Variable_Decl :: struct {
+    span: Span,
+    name: string,
+    expr: Expr,
+}
+
+// every statement is one of these two
+Stmt :: union {
+    Show,
+    Variable_Decl,
+}
+
+// a program is a collection of statements
 Program :: struct {
-    shows: [dynamic]Show,
+    statements: [dynamic]Stmt,
 }
 
 // diagnostic is an error message with its coordinates
@@ -120,6 +142,8 @@ destroy_expr :: proc(expr: Expr) {
         if e.is_string {
             delete(e.text)
         }
+    case Variable:
+    // nothing to free, the name lives in the source text
     case Binary:
         destroy_expr(e.left^)
         destroy_expr(e.right^)
@@ -131,12 +155,18 @@ destroy_expr :: proc(expr: Expr) {
     }
 }
 
-// delete all of the memory allocated to the collection of shows while compilation
+// delete all of the memory allocated to the collection of statements while compilation
 destroy_program :: proc(program: ^Program) {
-    for &show in program.shows {
-        destroy_expr(show.expr)
+    for &stmt in program.statements {
+        switch s in stmt {
+        case Show:
+            destroy_expr(s.expr)
+        case Variable_Decl:
+            destroy_expr(s.expr)
+            delete(s.name)
+        }
     }
-    delete(program.shows)
+    delete(program.statements)
 }
 
 // delete all of the memory allocated to the collection of errors while compilation
