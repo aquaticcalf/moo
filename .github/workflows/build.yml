@@ -110,21 +110,23 @@ jobs:
       - name: set up llvm
         uses: llvm-actions/setup-llvm@v1
         with:
-          version: '18.1.8'
+          version: '20.1.8'
 
       - name: compile llvm shim
         shell: pwsh
         run: |
           $llvm = Split-Path (Get-Command clang.exe).Source -Parent
           cl.exe /nologo /c /I"$llvm\include" compiler\toolchain\llvm_shim.c /Fo:build\windows\llvm_shim.obj
+          cl.exe /nologo /EHsc /c /I"$llvm\include" compiler\toolchain\lld_shim.cpp /Fo:build\windows\lld_shim.obj
           lib.exe /nologo build\windows\llvm_shim.obj /out:build\windows\libmoo_llvm_shim.lib
+          lib.exe /nologo build\windows\lld_shim.obj /out:build\windows\libmoo_lld_shim.lib
 
       # link the compiler object, shim, and llvm c api on a native windows runner
       - name: link moo.exe
         shell: pwsh
         run: |
           $llvm = Split-Path (Get-Command clang.exe).Source -Parent
-          link.exe build\windows\moo.obj build\windows\libmoo_llvm_shim.lib /LIBPATH:"$llvm\lib" LLVM-C.lib /out:build\windows\moo.exe /subsystem:console /nodefaultlib:libcmt.lib /nodefaultlib:libucrt.lib msvcrt.lib ucrt.lib ole32.lib bcrypt.lib kernel32.lib shell32.lib advapi32.lib
+          link.exe build\windows\moo.obj build\windows\libmoo_llvm_shim.lib build\windows\libmoo_lld_shim.lib /LIBPATH:"$llvm\lib" LLVM-C.lib lldCOFF.lib lldCommon.lib /out:build\windows\moo.exe /subsystem:console /nodefaultlib:libcmt.lib /nodefaultlib:libucrt.lib msvcrt.lib ucrt.lib ole32.lib bcrypt.lib kernel32.lib shell32.lib advapi32.lib
 
       - name: upload windows exe
         uses: actions/upload-artifact@v4

@@ -1,7 +1,6 @@
 package toolchain
 
 import "core:fmt"
-import "core:os"
 
 // this is the process result from the native linker
 link_object :: proc(object_path, executable: string) -> Process_Result {
@@ -16,20 +15,16 @@ link_object :: proc(object_path, executable: string) -> Process_Result {
     when ODIN_OS == .Windows {
         command = []string{"lld-link", object_path, "/out:" + executable, "/subsystem:console"}
     }
-    state, stdout, stderr, err := os.process_exec(
-        os.Process_Desc{command = command},
-        context.temp_allocator,
-    )
-    if err != nil {
-        return Process_Result{message = fmt.aprintf("could not start lld: %v", err)}
+    error_message, linked := link_in_process(command)
+    if !linked {
+        return Process_Result{
+            exit_code = 1,
+            stderr = error_message,
+            started = true,
+            message = "in-process lld could not link the program",
+        }
     }
-    return Process_Result{
-        exit_code = state.exit_code,
-        stdout = string(stdout),
-        stderr = string(stderr),
-        started = true,
-        ok = state.success && state.exit_code == 0,
-    }
+    return Process_Result{started = true, ok = true}
 }
 
 // emit llvm ir to an object and link it without starting clang
