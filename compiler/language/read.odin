@@ -2,10 +2,12 @@ package language
 
 import "core:os"
 
+// is the character a letter?
 is_letter :: proc(c: byte) -> bool {
     return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || c == '_'
 }
 
+// the actual file reader that enables the parser
 read_text :: proc(path: string, diagnostics: ^Diagnostics) -> (string, bool) {
     data, err := os.read_entire_file(path, context.temp_allocator)
     if err != nil {
@@ -21,6 +23,7 @@ read_text :: proc(path: string, diagnostics: ^Diagnostics) -> (string, bool) {
     return string(data[start:]), true
 }
 
+// mapping tokens to their values
 scan :: proc(source: string, diagnostics: ^Diagnostics) -> [dynamic]Token {
     tokens: [dynamic]Token
     line := 1
@@ -102,6 +105,7 @@ scan :: proc(source: string, diagnostics: ^Diagnostics) -> [dynamic]Token {
     return tokens
 }
 
+// hash, this is used in finding a unique path in build step
 hash_source :: proc(source: string) -> u64 {
     value_hash: u64 = 14695981039346656037
     for value in source {
