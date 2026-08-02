@@ -31,7 +31,7 @@ set_symbol :: proc(symbols: ^[dynamic]Symbol, name: string, type: Type) {
 // check a sequence of statements and infer every value used inside it
 check_statements :: proc(stmts: []Stmt, symbols: ^[dynamic]Symbol, diagnostics: ^Diagnostics) {
     for stmt in stmts {
-        switch s in stmt {
+        #partial switch s in stmt {
         case Show:
             value_type := infer_expr(s.expr, symbols[:], diagnostics)
             if value_type == .Unknown {
@@ -96,7 +96,7 @@ check_if_chain :: proc(block: ^If_Block, symbols: ^[dynamic]Symbol, diagnostics:
 
 // infer the kind of an expression and report contradictions
 infer_expr :: proc(expr: Expr, symbols: []Symbol, diagnostics: ^Diagnostics) -> Type {
-    switch e in expr {
+    #partial switch e in expr {
     case Literal:
         if e.is_string {
             return .String
@@ -145,10 +145,10 @@ is_direct_string :: proc(expr: Expr) -> bool {
 
 // turn an inferred kind into friendly diagnostic wording
 type_name :: proc(value_type: Type) -> string {
-    switch value_type {
+    #partial switch value_type {
+    case .Unknown: return "an unknown value"
     case .Integer: return "a number"
     case .Boolean: return "a boolean"
     case .String: return "a string"
-    case: return "an unknown value"
     }
 }
