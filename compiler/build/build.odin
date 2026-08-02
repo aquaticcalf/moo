@@ -2,10 +2,12 @@ package build
 
 import "core:fmt"
 import "core:os"
+
 import "compiler:build/llvm"
 import "compiler:build/native"
 import "compiler:language"
 
+// this holds all details of a build result ( output )
 Build_Result :: struct {
     executable: string,
     ir_path: string,
@@ -16,6 +18,7 @@ Build_Result :: struct {
     ok: bool,
 }
 
+// this holds all details of a build environment ( input )
 Build_Options :: struct {
     source_path: string,
     source_hash: u64,
@@ -23,6 +26,7 @@ Build_Options :: struct {
     executable: string,
 }
 
+// build cache goes to ~/.moo/
 cache_directory :: proc() -> (string, bool) {
     home, err := os.user_home_dir(context.temp_allocator)
     if err != nil {
@@ -35,6 +39,7 @@ cache_directory :: proc() -> (string, bool) {
     return cache_dir, true
 }
 
+// this helps in figuring out a unique enough path for each binary
 artifact_path :: proc(source_path: string, source_hash: u64, suffix: string) -> (string, string, bool) {
     cache_dir, path_ok := cache_directory()
     if !path_ok {
@@ -52,6 +57,7 @@ artifact_path :: proc(source_path: string, source_hash: u64, suffix: string) -> 
     return path, "", true
 }
 
+// this is the part where we convert the code -> llvm -> binary
 compile :: proc(program: language.Program, options: Build_Options) -> Build_Result {
     ir_path := options.ir_path
     if ir_path == "" {
@@ -114,6 +120,7 @@ compile :: proc(program: language.Program, options: Build_Options) -> Build_Resu
     return result
 }
 
+// publish means to copy the binary from cache directory to current directory
 publish :: proc(result: Build_Result, source_path: string) -> (string, string, bool) {
     destination, path_ok := native.output_path(source_path)
     if !path_ok {
@@ -126,6 +133,7 @@ publish :: proc(result: Build_Result, source_path: string) -> (string, string, b
     return destination, "", true
 }
 
+// clean is used to clean up old artifacts left in cache directory
 clean :: proc() -> (string, string, bool) {
     cache_dir, path_ok := cache_directory()
     if !path_ok {
@@ -153,6 +161,7 @@ clean :: proc() -> (string, string, bool) {
     return cache_dir, "", true
 }
 
+// run just runs the binary
 run :: proc(executable: string) -> native.Process_Result {
     return native.run(executable)
 }
