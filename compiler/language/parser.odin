@@ -2,6 +2,7 @@ package language
 
 import "core:strings"
 
+// read the file and return parsed content
 parse_file :: proc(path: string) -> Parse_Result {
     diagnostics := Diagnostics{path = path}
     text, ok := read_text(path, &diagnostics)
@@ -12,6 +13,7 @@ parse_file :: proc(path: string) -> Parse_Result {
     return parse(text, path)
 }
 
+// takes the source code and parses it
 parse :: proc(source: string, path: string) -> Parse_Result {
     diagnostics := Diagnostics{path = path}
     tokens := scan(source, &diagnostics)
@@ -30,6 +32,7 @@ parse :: proc(source: string, path: string) -> Parse_Result {
     return Parse_Result{program = program, diagnostics = diagnostics, ok = true, source_hash = hash_source(source)}
 }
 
+// here is where each token gets a meaning to it
 parse_tokens :: proc(tokens: []Token, diagnostics: ^Diagnostics) -> Program {
     program: Program
     index := 0
