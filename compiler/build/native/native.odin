@@ -3,6 +3,7 @@ package native
 import "core:fmt"
 import "core:os"
 
+// this is a generic process output tracking system
 Process_Result :: struct {
     exit_code: int,
     stdout: string,
@@ -12,6 +13,7 @@ Process_Result :: struct {
     ok: bool,
 }
 
+// this helps in figuring out the file extension based on the operating system
 output_path :: proc(source_path: string) -> (string, bool) {
     output_name := os.stem(source_path)
     when ODIN_OS == .Windows {
@@ -25,6 +27,7 @@ output_path :: proc(source_path: string) -> (string, bool) {
     return path, true
 }
 
+// this is the process that compiles the ir code into a binary
 compile :: proc(ir_path, executable: string) -> Process_Result {
     state, stdout, stderr, err := os.process_exec(
         os.Process_Desc{command = []string{"clang", ir_path, "-o", executable}},
@@ -44,6 +47,7 @@ compile :: proc(ir_path, executable: string) -> Process_Result {
     }
 }
 
+// this is the process that runs a binary
 run :: proc(executable: string) -> Process_Result {
     state, stdout, stderr, err := os.process_exec(
         os.Process_Desc{command = []string{executable}},
