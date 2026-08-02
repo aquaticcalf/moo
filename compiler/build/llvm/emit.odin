@@ -2,17 +2,21 @@ package llvm
 
 import "core:fmt"
 import "core:strings"
+
 import "compiler:language"
 
+// write a string to the builder
 write :: proc(builder: ^strings.Builder, text: string) {
     strings.write_string(builder, text)
 }
 
+// write a line ( string + enter ) to the builder
 line :: proc(builder: ^strings.Builder, text: string) {
     write(builder, text)
     write(builder, "\n")
 }
 
+// convert a string into bytes
 decode_string :: proc(literal: string) -> [dynamic]byte {
     bytes: [dynamic]byte
     if len(literal) < 2 {
@@ -40,6 +44,7 @@ decode_string :: proc(literal: string) -> [dynamic]byte {
     return bytes
 }
 
+// write a byte to the builder
 write_byte :: proc(builder: ^strings.Builder, value: byte) {
     if value >= 32 && value <= 126 && value != '\\' && value != '"' {
         write(builder, string([]byte{value}))
@@ -48,6 +53,7 @@ write_byte :: proc(builder: ^strings.Builder, value: byte) {
     write(builder, fmt.aprintf("\\%02x", value))
 }
 
+// finally, constructing the llvm code
 emit_program :: proc(program: language.Program) -> string {
     builder: strings.Builder
     strings.builder_init(&builder)
