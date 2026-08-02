@@ -1,4 +1,4 @@
-package language
+package frontend
 
 import "core:os"
 
@@ -45,6 +45,12 @@ word_kind :: proc(word: string) -> (Token_Kind, bool) {
     }
     if word == "give" {
         return .Keyword_Give, true
+    }
+    if word == "true" {
+        return .Keyword_True, true
+    }
+    if word == "false" {
+        return .Keyword_False, true
     }
     return {}, false
 }

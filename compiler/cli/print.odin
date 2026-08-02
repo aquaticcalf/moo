@@ -1,8 +1,8 @@
-package app
+package cli
 
 import "core:fmt"
 
-import "compiler:language"
+import "compiler:frontend"
 
 // sometimes i forget what commands i even have
 print_usage :: proc() {
@@ -15,7 +15,7 @@ print_usage :: proc() {
 }
 
 // this shows any errors in the moo files
-print_diagnostics :: proc(diagnostics: language.Diagnostics) {
+print_diagnostics :: proc(diagnostics: frontend.Diagnostics) {
     for diagnostic in diagnostics.errors {
         fmt.eprintf(
             "%v:%v:%v: %v\n",

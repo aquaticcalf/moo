@@ -3,9 +3,10 @@ package main
 import "core:os"
 import "core:fmt"
 
-import "compiler:app"
+import "compiler:cli"
 import "compiler:build"
-import "compiler:language"
+import "compiler:frontend"
+import "compiler:semantic"
 
 // this is the actual entry point to the compiler binary
 main :: proc() {
@@ -15,13 +16,13 @@ main :: proc() {
 // this defines what happens when we run the compiler
 run :: proc(args: []string) -> int {
     if len(args) == 0 {
-        app.print_usage()
+        cli.print_usage()
         return 1
     }
 
     command := args[0]
     if command == "help" && len(args) == 1 {
-        app.print_usage()
+        cli.print_usage()
         return 0
     }
 
@@ -41,14 +42,20 @@ run :: proc(args: []string) -> int {
     }
 
     if len(args) != 2 || (command != "check" && command != "build" && command != "run") {
-        app.print_usage()
+        cli.print_usage()
         return 1
     }
 
-    parsed := language.parse_file(args[1])
-    defer language.destroy_parse_result(&parsed)
+    parsed := frontend.analyze_file(args[1])
+    defer frontend.destroy_analysis(&parsed)
+    if parsed.ok {
+        semantic.semantic_check(parsed.program, &parsed.diagnostics)
+        if frontend.has_errors(&parsed.diagnostics) {
+            parsed.ok = false
+        }
+    }
     if !parsed.ok {
-        app.print_diagnostics(parsed.diagnostics)
+        cli.print_diagnostics(parsed.diagnostics)
         return 1
     }
 
@@ -57,11 +64,11 @@ run :: proc(args: []string) -> int {
         return 0
     }
 
-    result := build.compile(parsed.program, build.Build_Options{
+    result := build.compile_source(parsed.program, build.Build_Request{
         source_path = args[1],
         source_hash = parsed.source_hash,
     })
-    app.print_process_output(result.stdout, result.stderr)
+    cli.print_process_output(result.stdout, result.stderr)
     if !result.ok {
         fmt.eprintf("%v\n", result.message)
         return 1
@@ -82,7 +89,7 @@ run :: proc(args: []string) -> int {
     }
 
     run_result := build.run(result.executable)
-    app.print_process_output(run_result.stdout, run_result.stderr)
+    cli.print_process_output(run_result.stdout, run_result.stderr)
     if !run_result.started {
         fmt.eprintf("%v\n", run_result.message)
     }

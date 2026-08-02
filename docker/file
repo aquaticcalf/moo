@@ -10,6 +10,8 @@ RUN apt-get update \
         make \
         lld \
         llvm \
+        llvm-dev \
+        lld \
         mingw-w64 \
         tar \
     && rm -rf /var/lib/apt/lists/*
