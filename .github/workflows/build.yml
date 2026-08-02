@@ -1,0 +1,120 @@
+name: build moo binaries
+
+on:
+  workflow_dispatch:
+    inputs:
+      target:
+        description: 'which build(s) to produce'
+        type: choice
+        required: true
+        default: both
+        options:
+          - linux
+          - windows
+          - both
+
+permissions:
+  contents: read
+  packages: read
+
+env:
+  GHCR_IMAGE: ghcr.io/aquaticcalf/moo:latest
+
+jobs:
+  # ---------- linux ----------
+  linux:
+    name: linux build (dev container)
+    runs-on: ubuntu-latest
+    if: github.event.inputs.target == 'linux' || github.event.inputs.target == 'both'
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: log in to ghcr (dev image is private)
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: build linux binary
+        run: |
+          docker run --rm \
+            -v "${{ github.workspace }}:/workspace" \
+            -w /workspace \
+            ${{ env.GHCR_IMAGE }} \
+            make linux
+
+      - name: upload linux binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: moo-linux
+          path: build/linux/moo
+          if-no-files-found: error
+
+  # ---------- windows, part 1: cross compile the .obj in the dev container ----------
+  windows-obj:
+    name: windows part 1 (obj via dev container)
+    runs-on: ubuntu-latest
+    if: github.event.inputs.target == 'windows' || github.event.inputs.target == 'both'
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: log in to ghcr (dev image is private)
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # same command as `make windows` but without the clear/echo bits
+      - name: compile windows object
+        run: |
+          docker run --rm \
+            -v "${{ github.workspace }}:/workspace" \
+            -w /workspace \
+            ${{ env.GHCR_IMAGE }} \
+            sh -c "mkdir -p build/windows && cd compiler && odin build . --collection:compiler=. -o:speed -out:../build/windows/moo -target:windows_amd64 -build-mode:obj"
+
+      - name: upload windows object
+        uses: actions/upload-artifact@v4
+        with:
+          name: moo-windows-obj
+          path: build/windows/moo.obj
+          if-no-files-found: error
+
+  # ---------- windows, part 2: link on a real windows box with msvc ----------
+  # mingw-w64 in the container doesn't carry the MSVC/ucrt import libs
+  # so this has to happen on an actual windows runner
+  windows-link:
+    name: windows part 2 (link.exe -> moo.exe)
+    runs-on: windows-latest
+    needs: windows-obj
+    if: github.event.inputs.target == 'windows' || github.event.inputs.target == 'both'
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: download windows object
+        uses: actions/download-artifact@v4
+        with:
+          name: moo-windows-obj
+          path: build/windows
+
+      # puts cl.exe / link.exe / the MSVC + Windows SDK LIB paths on PATH
+      - name: set up msvc dev environment
+        uses: ilammy/msvc-dev-cmd@v1
+
+      # exact link line from the makefile, run from the repo root
+      - name: link moo.exe
+        shell: pwsh
+        run: |
+          link.exe build/windows/moo.obj /out:build/windows/moo.exe /subsystem:console /nodefaultlib:libcmt.lib /nodefaultlib:libucrt.lib msvcrt.lib ucrt.lib ole32.lib bcrypt.lib kernel32.lib shell32.lib advapi32.lib
+
+      - name: upload windows exe
+        uses: actions/upload-artifact@v4
+        with:
+          name: moo-windows
+          path: build/windows/moo.exe
+          if-no-files-found: error
