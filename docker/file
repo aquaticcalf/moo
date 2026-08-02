@@ -5,14 +5,23 @@ ARG ODIN_RELEASE=dev-2026-07a
 RUN apt-get update \
     && apt-get install --yes --no-install-recommends \
         ca-certificates \
-        clang \
         curl \
+        gcc \
+        g++ \
+        gnupg \
         make \
-        lld \
-        llvm \
-        llvm-dev \
         mingw-w64 \
         tar \
+    && curl --fail --location https://apt.llvm.org/llvm-snapshot.gpg.key \
+        | gpg --dearmor --output /etc/apt/trusted.gpg.d/llvm.gpg \
+    && echo "deb http://apt.llvm.org/noble/ llvm-toolchain-noble-20 main" \
+        > /etc/apt/sources.list.d/llvm.list \
+    && apt-get update \
+    && apt-get install --yes --no-install-recommends \
+        llvm-20 \
+        llvm-20-dev \
+        lld-20 \
+        liblld-20-dev \
     && rm -rf /var/lib/apt/lists/*
 
 RUN curl --fail --location --retry 5 --show-error \
@@ -26,6 +35,6 @@ RUN curl --fail --location --retry 5 --show-error \
     && rm /tmp/odin.tar.gz
 
 ENV ODIN_ROOT=/opt/odin
-ENV PATH=/opt/odin:${PATH}
+ENV PATH=/opt/odin:/usr/lib/llvm-20/bin:${PATH}
 
 WORKDIR /workspace
