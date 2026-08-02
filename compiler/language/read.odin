@@ -40,6 +40,12 @@ word_kind :: proc(word: string) -> (Token_Kind, bool) {
     if word == "becomes" {
         return .Keyword_Becomes, true
     }
+    if word == "make" {
+        return .Keyword_Make, true
+    }
+    if word == "give" {
+        return .Keyword_Give, true
+    }
     return {}, false
 }
 
@@ -255,7 +261,7 @@ scan :: proc(source: string, diagnostics: ^Diagnostics) -> [dynamic]Token {
             continue
         }
 
-        if c == '+' || c == '-' || c == '*' || c == '/' || c == '(' || c == ')' || c == ':' {
+        if c == '+' || c == '-' || c == '*' || c == '/' || c == '(' || c == ')' || c == ':' || c == ',' {
             kind: Token_Kind
             switch c {
             case '+': kind = .Plus
@@ -265,6 +271,7 @@ scan :: proc(source: string, diagnostics: ^Diagnostics) -> [dynamic]Token {
             case '(': kind = .LParen
             case ')': kind = .RParen
             case ':': kind = .Colon
+            case ',': kind = .Comma
             }
             append(&tokens, Token{
                 kind = kind,

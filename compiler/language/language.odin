@@ -19,6 +19,8 @@ Token_Kind :: enum {
     Keyword_If,
     Keyword_Otherwise,
     Keyword_Becomes,
+    Keyword_Make,
+    Keyword_Give,
     Identifier,
     Comparison,
     String,
@@ -30,6 +32,7 @@ Token_Kind :: enum {
     Colon,
     LParen,
     RParen,
+    Comma,
 }
 
 // a token has a kind, the actual data and it's coordinates
@@ -65,6 +68,7 @@ Expr :: union {
     Comparison,
     Binary,
     Grouping,
+    Call,
 }
 
 // a literal is a value written directly in the code ( a number or a string )
@@ -103,6 +107,13 @@ Grouping :: struct {
     inner: ^Expr,
 }
 
+// a call to a moo function
+Call :: struct {
+    span: Span,
+    name: string,
+    arguments: [dynamic]Expr,
+}
+
 // a show is a statement that prints an expression
 Show :: struct {
     span: Span,
@@ -120,6 +131,20 @@ Variable_Decl :: struct {
 Variable_Assign :: struct {
     span: Span,
     name: string,
+    expr: Expr,
+}
+
+// a function declaration with inferred parameter and return types
+Function :: struct {
+    span: Span,
+    name: string,
+    parameters: [dynamic]string,
+    body: [dynamic]Stmt,
+}
+
+// a return statement using the friendly 'give' keyword
+Return :: struct {
+    span: Span,
     expr: Expr,
 }
 
@@ -149,6 +174,8 @@ Stmt :: union {
     Variable_Decl,
     Variable_Assign,
     If_Block,
+    Function,
+    Return,
 }
 
 // a program is a collection of statements
@@ -213,6 +240,12 @@ destroy_expr :: proc(expr: Expr) {
     case Grouping:
         destroy_expr(e.inner^)
         free(e.inner)
+    case Call:
+        for argument in e.arguments {
+            destroy_expr(argument)
+        }
+        delete(e.arguments)
+        delete(e.name)
     }
 }
 
@@ -229,6 +262,14 @@ destroy_stmts :: proc(stmts: ^[dynamic]Stmt) {
         case Variable_Assign:
             destroy_expr(s.expr)
             delete(s.name)
+        case Return:
+            destroy_expr(s.expr)
+        case Function:
+            for parameter in s.parameters {
+                delete(parameter)
+            }
+            delete(s.parameters)
+            destroy_stmts(&s.body)
         case If_Block:
             destroy_stmt(&s)
         }

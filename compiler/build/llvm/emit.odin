@@ -87,6 +87,7 @@ emit_program :: proc(program: language.Program) -> string {
     // format string used to print integers: "%d\n"
     line(&builder, "@.fmt.int = private unnamed_addr constant [4 x i8] c\"%d\\0A\\00\", align 1")
     line(&builder, "")
+    emit_functions(&builder, program.statements[:], &state, string_lengths[:])
     line(&builder, "define i32 @main() {")
     line(&builder, "entry:")
 
@@ -106,7 +107,7 @@ emit_program :: proc(program: language.Program) -> string {
 // walk all nested statements and emit a string constant for each shown string
 collect_strings :: proc(stmts: []language.Stmt, string_lengths: ^[dynamic]int, builder: ^strings.Builder) {
     for stmt in stmts {
-        switch s in stmt {
+        #partial switch s in stmt {
         case language.Show:
             if literal, ok := s.expr.(language.Literal); ok && literal.is_string {
                 bytes := decode_string(literal.text)
@@ -130,6 +131,17 @@ collect_strings :: proc(stmts: []language.Stmt, string_lengths: ^[dynamic]int, b
                 collect_nested_strings(s.else_if, string_lengths, builder)
             }
             collect_strings(s.else_body[:], string_lengths, builder)
+        case language.Function:
+            collect_strings(s.body[:], string_lengths, builder)
+        case language.Return:
+            if literal, ok := s.expr.(language.Literal); ok && literal.is_string {
+                bytes := decode_string(literal.text)
+                append(string_lengths, len(bytes))
+                write(builder, fmt.aprintf("@.str.%d = private unnamed_addr constant [%d x i8] c\"", len(string_lengths) - 1, len(bytes)))
+                for value in bytes { write_byte(builder, value) }
+                line(builder, "\", align 1")
+                delete(bytes)
+            }
         case language.Variable_Decl:
         case language.Variable_Assign:
         }
@@ -151,7 +163,7 @@ collect_nested_strings :: proc(block: ^language.If_Block, string_lengths: ^[dyna
 // walk all nested statements and emit a global for each variable
 collect_variables :: proc(stmts: []language.Stmt, variable_names: ^[dynamic]string, builder: ^strings.Builder) {
     for stmt in stmts {
-        switch s in stmt {
+        #partial switch s in stmt {
         case language.Variable_Decl:
             if !slice_contains(variable_names[:], s.name) {
                 append(variable_names, strings.clone(s.name))
@@ -164,6 +176,16 @@ collect_variables :: proc(stmts: []language.Stmt, variable_names: ^[dynamic]stri
             }
             collect_variables(s.else_body[:], variable_names, builder)
         case language.Show:
+        case language.Variable_Assign:
+        case language.Function:
+            for parameter in s.parameters {
+                if !slice_contains(variable_names[:], parameter) {
+                    append(variable_names, strings.clone(parameter))
+                    line(builder, fmt.aprintf("@var.%s = global i32 0", sanitize(parameter)))
+                }
+            }
+            collect_variables(s.body[:], variable_names, builder)
+        case language.Return:
         }
     }
 }
@@ -183,7 +205,7 @@ collect_nested_variables :: proc(block: ^language.If_Block, variable_names: ^[dy
 // emit a list of statements at the current insertion point
 emit_statements :: proc(builder: ^strings.Builder, stmts: []language.Stmt, state: ^Emit_State, string_lengths: []int) {
     for stmt in stmts {
-        switch s in stmt {
+        #partial switch s in stmt {
         case language.Variable_Decl:
             value := emit_expr(builder, s.expr, &state.counter)
             line(builder, fmt.aprintf(
@@ -215,8 +237,56 @@ emit_statements :: proc(builder: ^strings.Builder, stmts: []language.Stmt, state
             }
         case language.If_Block:
             emit_if_block(builder, s, state, string_lengths)
+        case language.Function:
+        case language.Return:
+            value := emit_expr(builder, s.expr, &state.counter)
+            line(builder, fmt.aprintf("  ret i32 %s", value))
         }
     }
+}
+
+// emit all moo functions before the executable entry point
+emit_functions :: proc(builder: ^strings.Builder, stmts: []language.Stmt, state: ^Emit_State, string_lengths: []int) {
+    for stmt in stmts {
+        if function, ok := stmt.(language.Function); ok {
+            parameters_builder: strings.Builder
+            strings.builder_init(&parameters_builder)
+            for parameter, index in function.parameters {
+                if index > 0 { strings.write_string(&parameters_builder, ", ") }
+                strings.write_string(&parameters_builder, fmt.aprintf("i32 %%%s", sanitize(parameter)))
+            }
+            parameters := strings.to_string(parameters_builder)
+            line(builder, fmt.aprintf("define i32 @moo_%s(%s) %s", sanitize(function.name), parameters, "{"))
+            line(builder, "entry:")
+            for parameter in function.parameters {
+                line(builder, fmt.aprintf("  store i32 %%%s, ptr @var.%s", sanitize(parameter), sanitize(parameter)))
+            }
+            emit_statements(builder, function.body[:], state, string_lengths)
+            if !contains_return(function.body[:]) {
+                line(builder, "  ret i32 0")
+            }
+            line(builder, "}")
+            line(builder, "")
+        }
+    }
+}
+
+// check whether a function body contains a return statement
+contains_return :: proc(stmts: []language.Stmt) -> bool {
+    for stmt in stmts {
+        #partial switch s in stmt {
+        case language.Return:
+            return true
+        case language.If_Block:
+            if contains_return(s.body[:]) || contains_return(s.else_body[:]) {
+                return true
+            }
+            if s.else_if != nil && contains_return(s.else_if.body[:]) {
+                return true
+            }
+        }
+    }
+    return false
 }
 
 // emit an if / otherwise if / otherwise chain with basic blocks
@@ -313,7 +383,7 @@ sanitize :: proc(name: string) -> string {
 
 // turn an expression into an i32 llvm value, naming the results %%t.n
 emit_expr :: proc(builder: ^strings.Builder, expr: language.Expr, counter: ^int) -> string {
-    switch e in expr {
+    #partial switch e in expr {
     case language.Literal:
         if e.is_string {
             // a string has no numeric value, this should not be reached
@@ -334,6 +404,18 @@ emit_expr :: proc(builder: ^strings.Builder, expr: language.Expr, counter: ^int)
         return name
     case language.Grouping:
         return emit_expr(builder, e.inner^, counter)
+    case language.Call:
+        arguments_builder: strings.Builder
+        strings.builder_init(&arguments_builder)
+        for argument, index in e.arguments {
+            if index > 0 { strings.write_string(&arguments_builder, ", ") }
+            strings.write_string(&arguments_builder, fmt.aprintf("i32 %s", emit_expr(builder, argument, counter)))
+        }
+        arguments := strings.to_string(arguments_builder)
+        name := fmt.aprintf("%%t.%d", counter^)
+        counter^ += 1
+        line(builder, fmt.aprintf("  %s = call i32 @moo_%s(%s)", name, sanitize(e.name), arguments))
+        return name
     case language.Binary:
         left := emit_expr(builder, e.left^, counter)
         right := emit_expr(builder, e.right^, counter)

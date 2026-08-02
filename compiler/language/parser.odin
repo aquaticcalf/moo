@@ -80,6 +80,14 @@ parse_block :: proc(tokens: []Token, index: ^int, diagnostics: ^Diagnostics, stm
             if !parse_show(tokens, index, diagnostics, stmts) {
                 return false
             }
+        case .Keyword_Make:
+            if !parse_function(tokens, index, diagnostics, stmts) {
+                return false
+            }
+        case .Keyword_Give:
+            if !parse_return(tokens, index, diagnostics, stmts) {
+                return false
+            }
         case:
             reportf(diagnostics, token.span, "expected a statement")
             skip_to_line_end(tokens, index)
@@ -114,6 +122,87 @@ parse_show :: proc(tokens: []Token, index: ^int, diagnostics: ^Diagnostics, stmt
         reportf(diagnostics, tokens[index^].span, "expected the line to end after show")
         skip_to_line_end(tokens, index)
     }
+    return true
+}
+
+// parse a function declaration: "make name(parameters):"
+parse_function :: proc(tokens: []Token, index: ^int, diagnostics: ^Diagnostics, stmts: ^[dynamic]Stmt) -> bool {
+    token := tokens[index^]
+    index^ += 1
+    if index^ >= len(tokens) || tokens[index^].kind != .Identifier {
+        reportf(diagnostics, token.span, "expected a function name after 'make'")
+        skip_to_line_end(tokens, index)
+        return false
+    }
+    name := strings.clone(tokens[index^].text)
+    index^ += 1
+    parameters: [dynamic]string
+    if index^ >= len(tokens) || tokens[index^].kind != .LParen {
+        reportf(diagnostics, token.span, "expected '(' after the function name")
+        delete(name)
+        skip_to_line_end(tokens, index)
+        return false
+    }
+    index^ += 1
+    for index^ < len(tokens) && tokens[index^].kind != .RParen {
+        if tokens[index^].kind != .Identifier {
+            reportf(diagnostics, tokens[index^].span, "expected a parameter name")
+            delete(name)
+            delete(parameters)
+            skip_to_line_end(tokens, index)
+            return false
+        }
+        append(&parameters, strings.clone(tokens[index^].text))
+        index^ += 1
+        if index^ < len(tokens) && tokens[index^].kind == .Comma {
+            index^ += 1
+        } else if index^ < len(tokens) && tokens[index^].kind != .RParen {
+            reportf(diagnostics, tokens[index^].span, "expected ',' between parameters")
+            delete(name)
+            delete(parameters)
+            skip_to_line_end(tokens, index)
+            return false
+        }
+    }
+    if index^ >= len(tokens) || tokens[index^].kind != .RParen {
+        reportf(diagnostics, token.span, "expected ')' after parameters")
+        delete(name)
+        delete(parameters)
+        return false
+    }
+    index^ += 1
+    if index^ >= len(tokens) || tokens[index^].kind != .Colon {
+        reportf(diagnostics, token.span, "expected ':' after the function header")
+        delete(name)
+        delete(parameters)
+        skip_to_line_end(tokens, index)
+        return false
+    }
+    index^ += 1
+    body: [dynamic]Stmt
+    if !parse_indented_body(tokens, index, diagnostics, &body) {
+        delete(name)
+        delete(parameters)
+        destroy_stmts(&body)
+        return false
+    }
+    if index^ < len(tokens) && tokens[index^].kind == .Dedent {
+        index^ += 1
+    }
+    append(stmts, Function{span = token.span, name = name, parameters = parameters, body = body})
+    return true
+}
+
+// parse "give expression"
+parse_return :: proc(tokens: []Token, index: ^int, diagnostics: ^Diagnostics, stmts: ^[dynamic]Stmt) -> bool {
+    token := tokens[index^]
+    index^ += 1
+    expression, ok := parse_expression(tokens, index, diagnostics)
+    if !ok {
+        skip_to_line_end(tokens, index)
+        return false
+    }
+    append(stmts, Return{span = token.span, expr = expression})
     return true
 }
 
@@ -266,7 +355,34 @@ parse_primary :: proc(tokens: []Token, index: ^int, diagnostics: ^Diagnostics) -
     #partial switch token.kind {
     case .Identifier:
         index^ += 1
-        return Variable{span = token.span, name = strings.clone(token.text)}, true
+        if index^ >= len(tokens) || tokens[index^].kind != .LParen {
+            return Variable{span = token.span, name = strings.clone(token.text)}, true
+        }
+        index^ += 1
+        arguments: [dynamic]Expr
+        if index^ < len(tokens) && tokens[index^].kind != .RParen {
+            for {
+                argument, argument_ok := parse_expression(tokens, index, diagnostics)
+                if !argument_ok {
+                    delete(arguments)
+                    return nil, false
+                }
+                append(&arguments, argument)
+                if index^ < len(tokens) && tokens[index^].kind == .Comma {
+                    index^ += 1
+                    continue
+                }
+                break
+            }
+        }
+        if index^ >= len(tokens) || tokens[index^].kind != .RParen {
+            reportf(diagnostics, token.span, "expected ')' after function arguments")
+            for argument in arguments { destroy_expr(argument) }
+            delete(arguments)
+            return nil, false
+        }
+        index^ += 1
+        return Call{span = token.span, name = strings.clone(token.text), arguments = arguments}, true
     case .Number:
         index^ += 1
         value, ok := strconv.parse_i64(token.text)

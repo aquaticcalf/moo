@@ -111,6 +111,12 @@ infer_expr :: proc(expr: Expr, symbols: []Symbol, diagnostics: ^Diagnostics) -> 
         return value_type
     case Grouping:
         return infer_expr(e.inner^, symbols, diagnostics)
+    case Call:
+        for argument in e.arguments {
+            infer_expr(argument, symbols, diagnostics)
+        }
+        // functions currently infer integer results; explicit return inference follows
+        return .Integer
     case Binary:
         left := infer_expr(e.left^, symbols, diagnostics)
         right := infer_expr(e.right^, symbols, diagnostics)
@@ -151,4 +157,5 @@ type_name :: proc(value_type: Type) -> string {
     case .Boolean: return "a boolean"
     case .String: return "a string"
     }
+    return "an unknown value"
 }
