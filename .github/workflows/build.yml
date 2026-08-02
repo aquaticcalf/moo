@@ -108,25 +108,36 @@ jobs:
 
       # provide llvm headers and import libraries for the in-process shim
       - name: set up llvm
-        uses: llvm-actions/setup-llvm@v1
-        with:
-          version: '20.1.8'
+        shell: pwsh
+        run: |
+          $source = "$env:RUNNER_TEMP\llvm-project-20.1.8.src.tar.xz"
+          Invoke-WebRequest -Uri "https://github.com/llvm/llvm-project/releases/download/llvmorg-20.1.8/llvm-project-20.1.8.src.tar.xz" -OutFile $source
+          New-Item -ItemType Directory -Force -Path "$env:RUNNER_TEMP\llvm-source" | Out-Null
+          tar -xf $source --strip-components=1 -C "$env:RUNNER_TEMP\llvm-source"
+          cmake -S "$env:RUNNER_TEMP\llvm-source\llvm" -B "$env:RUNNER_TEMP\llvm-build" -G "Visual Studio 18 2026" -A x64 -DLLVM_ENABLE_PROJECTS=lld -DLLVM_ENABLE_LIBXML2=OFF -DLLVM_TARGETS_TO_BUILD=X86 -DLLVM_BUILD_TOOLS=ON -DCMAKE_INSTALL_PREFIX=C:\LLVM
+          cmake --build "$env:RUNNER_TEMP\llvm-build" --config Release --target lldCOFF lldCommon LLVM-C
+          cmake --install "$env:RUNNER_TEMP\llvm-build" --config Release
+          $llvm = 'C:\LLVM'
+          if (-not (Test-Path "$llvm\include\llvm-c\Analysis.h")) { throw 'LLVM development headers were not installed' }
+          "$llvm\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8
+          "LLVM_ROOT=$llvm" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8
 
       - name: compile llvm shim
         shell: pwsh
         run: |
-          $llvm = Split-Path (Get-Command clang.exe).Source -Parent
-          cl.exe /nologo /c /I"$llvm\include" compiler\toolchain\llvm_shim.c /Fo:build\windows\llvm_shim.obj
-          cl.exe /nologo /EHsc /c /I"$llvm\include" compiler\toolchain\lld_shim.cpp /Fo:build\windows\lld_shim.obj
-          lib.exe /nologo build\windows\llvm_shim.obj /out:build\windows\libmoo_llvm_shim.lib
-          lib.exe /nologo build\windows\lld_shim.obj /out:build\windows\libmoo_lld_shim.lib
+          $llvm = $env:LLVM_ROOT
+          cl.exe /nologo /c /I"$llvm\include" compiler\toolchain\llvm\shim.c /Fo:build\windows\llvmshim.obj
+          cl.exe /nologo /EHsc /std:c++20 /c /I"$llvm\include" compiler\toolchain\lld\shim.cpp /Fo:build\windows\lldshim.obj
+          lib.exe /nologo build\windows\llvmshim.obj /out:build\windows\libmoo_llvmshim.lib
+          lib.exe /nologo build\windows\lldshim.obj /out:build\windows\libmoo_lldshim.lib
 
       # link the compiler object, shim, and llvm c api on a native windows runner
       - name: link moo.exe
         shell: pwsh
         run: |
-          $llvm = Split-Path (Get-Command clang.exe).Source -Parent
-          link.exe build\windows\moo.obj build\windows\libmoo_llvm_shim.lib build\windows\libmoo_lld_shim.lib /LIBPATH:"$llvm\lib" LLVM-C.lib lldCOFF.lib lldCommon.lib /out:build\windows\moo.exe /subsystem:console /nodefaultlib:libcmt.lib /nodefaultlib:libucrt.lib msvcrt.lib ucrt.lib ole32.lib bcrypt.lib kernel32.lib shell32.lib advapi32.lib
+          $llvm = $env:LLVM_ROOT
+          $llvm_libs = & "$llvm\bin\llvm-config.exe" --link-static --libfiles lldCOFF lldCommon LLVM-C
+          link.exe build\windows\moo.obj build\windows\libmoo_llvmshim.lib build\windows\libmoo_lldshim.lib $llvm_libs /out:build\windows\moo.exe /subsystem:console /nodefaultlib:libcmt.lib /nodefaultlib:libucrt.lib msvcrt.lib ucrt.lib ole32.lib bcrypt.lib ntdll.lib kernel32.lib shell32.lib advapi32.lib
 
       - name: upload windows exe
         uses: actions/upload-artifact@v4

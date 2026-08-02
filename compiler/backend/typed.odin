@@ -10,18 +10,22 @@ emit_typed_statements :: proc(builder: ^strings.Builder, statements: []ir.Statem
     for statement in statements {
         #partial switch value in statement {
         case ir.Assign_Statement:
-            result := emit_typed_expr(builder, value.value, &state.counter)
-            line(builder, fmt.aprintf("  store i32 %s, ptr @var.%s", result, sanitize(value.name)))
+            result := emit_typed_value(builder, value.value, state)
+            line(builder, fmt.aprintf("  store %s %s, ptr @var.%s", result.type, result.value, sanitize(value.name)))
         case ir.Show_Statement:
-            result := emit_typed_expr(builder, value.value, &state.counter)
-            line(builder, fmt.aprintf("  %%show.%d = call i32 @printf(ptr @.fmt.int, i32 %s)", state.counter, result))
+            result := emit_typed_value(builder, value.value, state)
+            if result.type == "ptr" {
+                line(builder, fmt.aprintf("  %%show.%d = call i32 @puts(ptr %s)", state.counter, result.value))
+            } else {
+                line(builder, fmt.aprintf("  %%show.%d = call i32 @printf(ptr @.fmt.int, i32 %s)", state.counter, result.value))
+            }
             state.counter += 1
         case ir.Return_Statement:
             if value.has_value {
-                result := emit_typed_expr(builder, value.value, &state.counter)
-                line(builder, fmt.aprintf("  ret i32 %s", result))
+                result := emit_typed_value(builder, value.value, state)
+                line(builder, fmt.aprintf("  ret %s %s", result.type, result.value))
             } else {
-                line(builder, "  ret i32 0")
+                line(builder, "  ret void")
             }
         case ir.If_Statement:
             condition := emit_typed_expr(builder, value.condition, &state.counter)

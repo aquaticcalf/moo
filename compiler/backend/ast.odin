@@ -45,8 +45,31 @@ collect_strings :: proc(stmts: []frontend.Stmt, string_lengths: ^[dynamic]int, b
                 delete(bytes)
             }
         case frontend.Variable_Decl:
+            collect_expression_strings(s.expr, string_lengths, builder)
         case frontend.Variable_Assign:
+            collect_expression_strings(s.expr, string_lengths, builder)
         }
+    }
+}
+
+// collect string literals nested in expressions
+collect_expression_strings :: proc(expr: frontend.Expr, lengths: ^[dynamic]int, builder: ^strings.Builder) {
+    switch value in expr {
+    case frontend.Binary:
+        collect_expression_strings(value.left^, lengths, builder)
+        collect_expression_strings(value.right^, lengths, builder)
+    case frontend.Grouping:
+        collect_expression_strings(value.inner^, lengths, builder)
+    case frontend.Literal:
+        if value.is_string {
+            bytes := decode_string(value.text)
+            append(lengths, len(bytes))
+            write(builder, fmt.aprintf("@.str.%d = private unnamed_addr constant [%d x i8] c\"", len(lengths) - 1, len(bytes)))
+            for byte_value in bytes { write_byte(builder, byte_value) }
+            line(builder, "\", align 1")
+            delete(bytes)
+        }
+    case frontend.Variable, frontend.Call, frontend.Comparison:
     }
 }
 
@@ -69,7 +92,13 @@ collect_variables :: proc(stmts: []frontend.Stmt, variable_names: ^[dynamic]stri
         case frontend.Variable_Decl:
             if !slice_contains(variable_names[:], s.name) {
                 append(variable_names, strings.clone(s.name))
-                line(builder, fmt.aprintf("@var.%s = global i32 0", sanitize(s.name)))
+                variable_type := "i32"
+                initializer := "0"
+                if literal, ok := s.expr.(frontend.Literal); ok && literal.is_string {
+                    variable_type = "ptr"
+                    initializer = "null"
+                }
+                line(builder, fmt.aprintf("@var.%s = global %s %s", sanitize(s.name), variable_type, initializer))
             }
         case frontend.If_Block:
             collect_variables(s.body[:], variable_names, builder)
@@ -110,21 +139,23 @@ emit_statements :: proc(builder: ^strings.Builder, stmts: []frontend.Stmt, state
         #partial switch s in stmt {
         case frontend.Variable_Decl:
             value := emit_language_expr(builder, s.expr, &state.counter)
-            line(builder, fmt.aprintf(
-                "  store i32 %s, ptr @var.%s",
-                value,
-                sanitize(s.name),
-            ))
+            if literal, ok := s.expr.(frontend.Literal); ok && literal.is_string {
+                line(builder, fmt.aprintf("  store ptr getelementptr inbounds ([%d x i8], ptr @.str.%d, i64 0, i64 0), ptr @var.%s", string_lengths[state.string_index], state.string_index, sanitize(s.name)))
+                state.string_index += 1
+            } else {
+                line(builder, fmt.aprintf("  store i32 %s, ptr @var.%s", value, sanitize(s.name)))
+            }
             if literal, ok := s.expr.(frontend.Literal); ok && literal.is_boolean {
                 remember_boolean(&state.boolean_variables, s.name)
             }
         case frontend.Variable_Assign:
             value := emit_language_expr(builder, s.expr, &state.counter)
-            line(builder, fmt.aprintf(
-                "  store i32 %s, ptr @var.%s",
-                value,
-                sanitize(s.name),
-            ))
+            if literal, ok := s.expr.(frontend.Literal); ok && literal.is_string {
+                line(builder, fmt.aprintf("  store ptr getelementptr inbounds ([%d x i8], ptr @.str.%d, i64 0, i64 0), ptr @var.%s", string_lengths[state.string_index], state.string_index, sanitize(s.name)))
+                state.string_index += 1
+            } else {
+                line(builder, fmt.aprintf("  store i32 %s, ptr @var.%s", value, sanitize(s.name)))
+            }
             if literal, ok := s.expr.(frontend.Literal); ok && literal.is_boolean {
                 remember_boolean(&state.boolean_variables, s.name)
             }
@@ -197,13 +228,15 @@ emit_functions :: proc(builder: ^strings.Builder, module: ir.Module, state: ^Emi
         strings.builder_init(&parameters_builder)
         for parameter, index in function.parameter_names {
             if index > 0 { strings.write_string(&parameters_builder, ", ") }
-            strings.write_string(&parameters_builder, fmt.aprintf("i32 %%%s", sanitize(parameter)))
+            parameter_type := llvm_type(function.parameters[index])
+            strings.write_string(&parameters_builder, fmt.aprintf("%s %%%s", parameter_type, sanitize(parameter)))
         }
         parameters := strings.to_string(parameters_builder)
         line(builder, fmt.aprintf("define i32 @moo_%s(%s) %s", sanitize(function.name), parameters, "{"))
         line(builder, "entry:")
-        for parameter in function.parameter_names {
-            line(builder, fmt.aprintf("  store i32 %%%s, ptr @var.%s", sanitize(parameter), sanitize(parameter)))
+        for parameter, index in function.parameter_names {
+            parameter_type := llvm_type(function.parameters[index])
+            line(builder, fmt.aprintf("  store %s %%%s, ptr @var.%s", parameter_type, sanitize(parameter), sanitize(parameter)))
         }
         emit_typed_statements(builder, function.body[:], state)
         if !typed_contains_return(function.body[:]) {
@@ -311,11 +344,16 @@ emit_typed_expr :: proc(builder: ^strings.Builder, expr: ir.Expression, counter:
         strings.builder_init(&args)
         for argument, index in value.arguments {
             if index > 0 { strings.write_string(&args, ", ") }
-            strings.write_string(&args, fmt.aprintf("i32 %s", emit_typed_expr(builder, argument, counter)))
+            argument_type := llvm_type(value.parameter_types[index])
+            strings.write_string(&args, fmt.aprintf("%s %s", argument_type, emit_typed_expr(builder, argument, counter)))
+        }
+        if value.type == .Nothing {
+            line(builder, fmt.aprintf("  call void @moo_%s(%s)", sanitize(value.name), strings.to_string(args)))
+            return "0"
         }
         name := fmt.aprintf("%%t.%d", counter^)
         counter^ += 1
-        line(builder, fmt.aprintf("  %s = call i32 @moo_%s(%s)", name, sanitize(value.name), strings.to_string(args)))
+        line(builder, fmt.aprintf("  %s = call %s @moo_%s(%s)", name, llvm_type(value.type), sanitize(value.name), strings.to_string(args)))
         return name
     }
     return "0"

@@ -13,12 +13,59 @@ semantic_check :: proc(program: frontend.Program, diagnostics: ^frontend.Diagnos
             if _, exists := find_function(functions[:], function.name); exists {
                 frontend.reportf(diagnostics, function.span, "'%s' is already a function", function.name)
             } else {
-                append(&functions, Function_Info{name = function.name, arity = len(function.parameters), result = frontend.Type.Unknown})
+                info := Function_Info{name = function.name, arity = len(function.parameters), result = frontend.Type.Unknown}
+                for _ in function.parameters { append(&info.parameters, frontend.Type.Unknown) }
+                append(&functions, info)
             }
         }
     }
+    infer_function_parameters(program.statements[:], functions[:], diagnostics)
     infer_function_results(program.statements[:], &functions, diagnostics)
     check_statements(program.statements[:], &symbols, functions[:], diagnostics, false)
+}
+
+// infer parameter types from calls before checking function bodies
+infer_function_parameters :: proc(stmts: []frontend.Stmt, functions: []Function_Info, diagnostics: ^frontend.Diagnostics) {
+    symbols: [dynamic]Symbol
+    defer delete(symbols)
+    for stmt in stmts {
+        #partial switch value in stmt {
+        case frontend.Show:
+            infer_expr(value.expr, symbols[:], functions, diagnostics)
+        case frontend.Variable_Decl:
+            value_type := infer_expr(value.expr, symbols[:], functions, diagnostics)
+            set_symbol(&symbols, value.name, value_type)
+        case frontend.Variable_Assign:
+            infer_expr(value.expr, symbols[:], functions, diagnostics)
+        case frontend.Return:
+            if value.has_value { infer_expr(value.expr, symbols[:], functions, diagnostics) }
+        case frontend.If_Block:
+            infer_expr(value.condition, symbols[:], functions, diagnostics)
+            infer_function_parameters(value.body[:], functions, diagnostics)
+            infer_function_parameters(value.else_body[:], functions, diagnostics)
+        case frontend.Function:
+            local_symbols: [dynamic]Symbol
+            for parameter in value.parameters { set_symbol(&local_symbols, parameter, .Unknown) }
+            infer_function_parameters_with_symbols(value.body[:], functions, diagnostics, local_symbols[:])
+            delete(local_symbols)
+        }
+    }
+}
+
+infer_function_parameters_with_symbols :: proc(stmts: []frontend.Stmt, functions: []Function_Info, diagnostics: ^frontend.Diagnostics, symbols: []Symbol) {
+    for stmt in stmts {
+        #partial switch value in stmt {
+        case frontend.Show: infer_expr(value.expr, symbols, functions, diagnostics)
+        case frontend.Variable_Decl: infer_expr(value.expr, symbols, functions, diagnostics)
+        case frontend.Variable_Assign: infer_expr(value.expr, symbols, functions, diagnostics)
+        case frontend.Return: if value.has_value { infer_expr(value.expr, symbols, functions, diagnostics) }
+        case frontend.If_Block:
+            infer_expr(value.condition, symbols, functions, diagnostics)
+            infer_function_parameters_with_symbols(value.body[:], functions, diagnostics, symbols)
+            infer_function_parameters_with_symbols(value.else_body[:], functions, diagnostics, symbols)
+        case frontend.Function:
+        }
+    }
 }
 
 // infer return types before checking calls that use a function
@@ -27,8 +74,13 @@ infer_function_results :: proc(stmts: []frontend.Stmt, functions: ^[dynamic]Func
         if function, ok := stmt.(frontend.Function); ok {
             local_symbols: [dynamic]Symbol
             defer delete(local_symbols)
-            for parameter in function.parameters {
-                set_symbol(&local_symbols, parameter, frontend.Type.Integer)
+            function_index := find_function_index(functions[:], function.name)
+            for parameter, parameter_index in function.parameters {
+                parameter_type := frontend.Type.Integer
+                if function_index >= 0 && parameter_index < len(functions[function_index].parameters) {
+                    parameter_type = functions[function_index].parameters[parameter_index]
+                }
+                set_symbol(&local_symbols, parameter, parameter_type)
             }
             for body_stmt in function.body {
                 if returned, rok := body_stmt.(frontend.Return); rok {
@@ -75,16 +127,10 @@ check_statements :: proc(stmts: []frontend.Stmt, symbols: ^[dynamic]Symbol, func
             if value_type != .Integer && value_type != .String && value_type != .Boolean {
                 frontend.reportf(diagnostics, s.span, "cannot show this value")
             }
-            if value_type == .String && !is_direct_string(s.expr) {
-                frontend.reportf(diagnostics, s.span, "string values can currently only be shown directly")
-            }
+
         case frontend.Variable_Decl:
             value_type := infer_expr(s.expr, symbols[:], functions, diagnostics)
             if value_type == .Unknown {
-                continue
-            }
-            if value_type == .String {
-                frontend.reportf(diagnostics, s.span, "string variables are not supported yet; show the string directly")
                 continue
             }
             if _, exists := find_symbol(symbols[:], s.name); exists {
@@ -115,11 +161,16 @@ check_statements :: proc(stmts: []frontend.Stmt, symbols: ^[dynamic]Symbol, func
         case frontend.Function:
             local_symbols: [dynamic]Symbol
             defer delete(local_symbols)
-            for parameter in s.parameters {
+            function_index := find_function_index(functions, s.name)
+            for parameter, index in s.parameters {
                 if _, exists := find_symbol(local_symbols[:], parameter); exists {
                     frontend.reportf(diagnostics, s.span, "parameter '%s' is repeated", parameter)
                 } else {
-                    set_symbol(&local_symbols, parameter, .Integer)
+                    parameter_type := frontend.Type.Integer
+                    if function_index >= 0 && index < len(functions[function_index].parameters) {
+                        parameter_type = functions[function_index].parameters[index]
+                    }
+                    set_symbol(&local_symbols, parameter, parameter_type)
                 }
             }
             check_statements(s.body[:], &local_symbols, functions, diagnostics, true)

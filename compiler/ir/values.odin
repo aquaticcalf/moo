@@ -50,6 +50,7 @@ Grouping_Value :: struct {
 Call_Value :: struct {
     name: string,
     arguments: [dynamic]Expression,
+    parameter_types: [dynamic]Value_Type,
     type: Value_Type,
 }
 
@@ -72,6 +73,7 @@ destroy_expression :: proc(expr: Expression) {
     case Call_Value:
         for argument in value.arguments { destroy_expression(argument) }
         delete(value.arguments)
+        delete(value.parameter_types)
     case Literal_Value, Variable_Value:
     }
 }
@@ -107,7 +109,16 @@ lower_expression :: proc(expr: frontend.Expr) -> Expression {
         for argument in value.arguments {
             append(&arguments, lower_expression(argument))
         }
-        return Call_Value{name = value.name, arguments = arguments, type = .Integer}
+        parameter_types: [dynamic]Value_Type
+        for argument in value.arguments {
+            argument_type := Value_Type.Integer
+            if literal, ok := argument.(frontend.Literal); ok {
+                if literal.is_string { argument_type = .String }
+                if literal.is_boolean { argument_type = .Boolean }
+            }
+            append(&parameter_types, argument_type)
+        }
+        return Call_Value{name = value.name, arguments = arguments, parameter_types = parameter_types, type = .Integer}
     }
     return Literal_Value{type = .Integer}
 }

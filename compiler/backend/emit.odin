@@ -12,6 +12,7 @@ Emit_State :: struct {
     label_counter: int,
     string_index: int,
     boolean_variables: [dynamic]string,
+    string_lengths: []int,
 }
 
 // finally, constructing the llvm code
@@ -23,6 +24,10 @@ emit_program :: proc(module: ir.Module) -> string {
     line(&builder, "; moo llvm module")
     line(&builder, "declare i32 @puts(ptr)")
     line(&builder, "declare i32 @printf(ptr, ...)")
+    line(&builder, "declare i64 @strlen(ptr)")
+    line(&builder, "declare ptr @malloc(i64)")
+    line(&builder, "declare ptr @strcpy(ptr, ptr)")
+    line(&builder, "declare ptr @strcat(ptr, ptr)")
     line(&builder, "")
 
     state := Emit_State{}
@@ -35,13 +40,17 @@ emit_program :: proc(module: ir.Module) -> string {
 
     // one constant for every string that gets shown, anywhere in the program
     collect_strings(program.statements[:], &string_lengths, &builder)
+    state.string_lengths = string_lengths[:]
     if len(string_lengths) > 0 {
         line(&builder, "")
     }
 
-    // a global slot for every variable and every string constant
-    variable_names: [dynamic]string
-    collect_variables(program.statements[:], &variable_names, &builder)
+    // a typed global slot for every variable
+    for variable in module.variables {
+        initializer := "0"
+        if variable.type == .String { initializer = "null" }
+        line(&builder, fmt.aprintf("@var.%s = global %s %s", sanitize(variable.name), llvm_type(variable.type), initializer))
+    }
     line(&builder, "")
 
     // format string used to print integers: "%d\n"
@@ -53,7 +62,7 @@ emit_program :: proc(module: ir.Module) -> string {
     line(&builder, "define i32 @main() {")
     line(&builder, "entry:")
 
-    emit_statements(&builder, program.statements[:], &state, string_lengths[:])
+    emit_typed_statements(&builder, module.statements[:], &state)
 
     line(&builder, "  ret i32 0")
     line(&builder, "}")
@@ -63,9 +72,6 @@ emit_program :: proc(module: ir.Module) -> string {
         delete(name)
     }
     delete(state.boolean_variables)
-    for name in variable_names {
-        delete(name)
-    }
-    delete(variable_names)
+
     return strings.to_string(builder)
 }

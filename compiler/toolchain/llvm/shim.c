@@ -1,4 +1,4 @@
-#include "llvm_shim.h"
+#include "shim.h"
 
 #include <stdio.h>
 #include <string.h>

@@ -29,8 +29,16 @@ infer_expr :: proc(expr: frontend.Expr, symbols: []Symbol, functions: []Function
         } else if len(e.arguments) != function.arity {
             frontend.reportf(diagnostics, e.span, "'%s' expects %d arguments, but got %d", e.name, function.arity, len(e.arguments))
         }
-        for argument in e.arguments {
-            infer_expr(argument, symbols, functions, diagnostics)
+        for argument, index in e.arguments {
+            argument_type := infer_expr(argument, symbols, functions, diagnostics)
+            if exists && index < len(function.parameters) && argument_type != .Unknown {
+                expected := functions[find_function_index(functions, e.name)].parameters[index]
+                if expected == .Unknown {
+                    functions[find_function_index(functions, e.name)].parameters[index] = argument_type
+                } else if expected != argument_type {
+                    frontend.reportf(diagnostics, e.span, "argument %d of '%s' has type %s, expected %s", index + 1, e.name, argument_type, expected)
+                }
+            }
         }
         if exists && function.result != .Unknown {
             return function.result
@@ -42,8 +50,11 @@ infer_expr :: proc(expr: frontend.Expr, symbols: []Symbol, functions: []Function
         if left == .Unknown || right == .Unknown {
             return .Unknown
         }
+        if left == .String && right == .String && e.op == .Add {
+            return .String
+        }
         if left != .Integer || right != .Integer {
-            frontend.reportf(diagnostics, e.span, "arithmetic needs numbers")
+            frontend.reportf(diagnostics, e.span, "arithmetic needs numbers or string concatenation")
             return .Unknown
         }
         return .Integer

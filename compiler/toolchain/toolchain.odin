@@ -13,7 +13,7 @@ link_object :: proc(object_path, executable: string) -> Process_Result {
         "/lib/x86_64-linux-gnu/crtn.o", "-lc", "-lgcc", "-lgcc_s",
     }
     when ODIN_OS == .Windows {
-        command = []string{"lld-link", object_path, "/out:" + executable, "/subsystem:console"}
+        command = []string{"lld-link", object_path, fmt.aprintf("/out:%s", executable), "/subsystem:console"}
     }
     error_message, linked := link_in_process(command)
     if !linked {
