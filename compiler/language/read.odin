@@ -23,6 +23,72 @@ read_text :: proc(path: string, diagnostics: ^Diagnostics) -> (string, bool) {
     return string(data[start:]), true
 }
 
+// helper for scanning a word and returning kind
+word_kind :: proc(word: string) -> (Token_Kind, bool) {
+    if word == "show" {
+        return .Keyword_Show, true
+    }
+    if word == "is" {
+        return .Keyword_Is, true
+    }
+    if word == "if" {
+        return .Keyword_If, true
+    }
+    if word == "otherwise" {
+        return .Keyword_Otherwise, true
+    }
+    return {}, false
+}
+
+// look ahead after the word "is" to see if a comparison phrase follows
+// returns the comparison op, the number of source bytes consumed, and whether one was found
+read_comparison :: proc(source: string, offset: int) -> (Comparison_Op, int, bool) {
+    // skip spaces after "is"
+    pos := offset
+    for pos < len(source) && (source[pos] == ' ' || source[pos] == '\t') {
+        pos += 1
+    }
+
+    // read the words separated by spaces, remembering where each one ends
+    words: [dynamic]string
+    ends: [dynamic]int
+    defer delete(words)
+    defer delete(ends)
+    for pos < len(source) && is_letter(source[pos]) {
+        start := pos
+        for pos < len(source) && is_letter(source[pos]) {
+            pos += 1
+        }
+        append(&words, source[start:pos])
+        append(&ends, pos)
+        // skip one space between words
+        if pos < len(source) && source[pos] == ' ' {
+            pos += 1
+        }
+    }
+
+    // longest phrases first, so "greater than or equal to" is not taken as "greater than"
+    if len(words) >= 5 && words[0] == "greater" && words[1] == "than" && words[2] == "or" && words[3] == "equal" && words[4] == "to" {
+        return .Greater_Or_Equal, ends[4] - offset, true
+    }
+    if len(words) >= 5 && words[0] == "less" && words[1] == "than" && words[2] == "or" && words[3] == "equal" && words[4] == "to" {
+        return .Less_Or_Equal, ends[4] - offset, true
+    }
+    if len(words) >= 2 && words[0] == "equal" && words[1] == "to" {
+        return .Equal, ends[1] - offset, true
+    }
+    if len(words) >= 3 && words[0] == "not" && words[1] == "equal" && words[2] == "to" {
+        return .Not_Equal, ends[2] - offset, true
+    }
+    if len(words) >= 2 && words[0] == "greater" && words[1] == "than" {
+        return .Greater, ends[1] - offset, true
+    }
+    if len(words) >= 2 && words[0] == "less" && words[1] == "than" {
+        return .Less, ends[1] - offset, true
+    }
+    return {}, 0, false
+}
+
 // mapping tokens to their values
 scan :: proc(source: string, diagnostics: ^Diagnostics) -> [dynamic]Token {
     tokens: [dynamic]Token
@@ -30,8 +96,59 @@ scan :: proc(source: string, diagnostics: ^Diagnostics) -> [dynamic]Token {
     column := 1
     offset := 0
 
+    // indentation stack, starting with the top level at depth 0
+    indents: [dynamic]int
+    append(&indents, 0)
+    // how deep the current line is indented, and whether we already processed it
+    at_line_start := true
+    line_depth := 0
+
     for offset < len(source) {
         c := source[offset]
+
+        if at_line_start {
+            // measure the indentation of this line
+            depth := 0
+            scan := offset
+            for scan < len(source) && (source[scan] == ' ' || source[scan] == '\t') {
+                depth += 1
+                scan += 1
+            }
+
+            // blank lines or comment-only lines do not affect indentation
+            if scan >= len(source) || source[scan] == '\n' || source[scan] == '#' {
+                if scan < len(source) && source[scan] == '#' {
+                    // comment-only line: skip it entirely without touching indentation
+                    offset = scan
+                    for offset < len(source) && source[offset] != '\n' {
+                        offset += 1
+                        column += 1
+                    }
+                    at_line_start = true
+                    continue
+                }
+                if scan >= len(source) {
+                    break
+                }
+                // blank line: let it fall through to the newline handler below
+                at_line_start = false
+                continue
+            }
+
+            // a real line: reconcile indentation with the stack
+            top := indents[len(indents) - 1]
+            if depth > top {
+                append(&tokens, Token{kind = .Indent, span = Span{line = line, column = top + 1}})
+                append(&indents, depth)
+            } else if depth < top {
+                for len(indents) > 1 && depth < indents[len(indents) - 1] {
+                    append(&tokens, Token{kind = .Dedent, span = Span{line = line, column = depth + 1}})
+                    pop(&indents)
+                }
+            }
+            at_line_start = false
+            continue
+        }
 
         if c == ' ' || c == '\t' || c == '\r' {
             offset += 1
@@ -44,6 +161,7 @@ scan :: proc(source: string, diagnostics: ^Diagnostics) -> [dynamic]Token {
             offset += 1
             line += 1
             column = 1
+            at_line_start = true
             continue
         }
 
@@ -57,10 +175,19 @@ scan :: proc(source: string, diagnostics: ^Diagnostics) -> [dynamic]Token {
 
             word := source[start:offset]
             span := Span{line = line, column = start_column}
-            if word == "show" {
-                append(&tokens, Token{kind = .Keyword_Show, text = word, span = span})
-            } else if word == "is" {
-                append(&tokens, Token{kind = .Keyword_Is, text = word, span = span})
+            kind, is_keyword := word_kind(word)
+            if word == "is" {
+                // check whether an assignment "x is 3" or a comparison "x is equal to y"
+                cop, consumed, is_comp := read_comparison(source, offset)
+                if is_comp {
+                    append(&tokens, Token{kind = .Comparison, text = word, span = span, op = cop})
+                    offset += consumed
+                    column += consumed
+                } else {
+                    append(&tokens, Token{kind = .Keyword_Is, text = word, span = span})
+                }
+            } else if is_keyword {
+                append(&tokens, Token{kind = kind, text = word, span = span})
             } else {
                 append(&tokens, Token{kind = .Identifier, text = word, span = span})
             }
@@ -125,7 +252,7 @@ scan :: proc(source: string, diagnostics: ^Diagnostics) -> [dynamic]Token {
             continue
         }
 
-        if c == '+' || c == '-' || c == '*' || c == '/' || c == '(' || c == ')' {
+        if c == '+' || c == '-' || c == '*' || c == '/' || c == '(' || c == ')' || c == ':' {
             kind: Token_Kind
             switch c {
             case '+': kind = .Plus
@@ -134,6 +261,7 @@ scan :: proc(source: string, diagnostics: ^Diagnostics) -> [dynamic]Token {
             case '/': kind = .Slash
             case '(': kind = .LParen
             case ')': kind = .RParen
+            case ':': kind = .Colon
             }
             append(&tokens, Token{
                 kind = kind,
@@ -149,6 +277,13 @@ scan :: proc(source: string, diagnostics: ^Diagnostics) -> [dynamic]Token {
         offset += 1
         column += 1
     }
+
+    // unwind any remaining indentation at the end of the file
+    for len(indents) > 1 {
+        append(&tokens, Token{kind = .Dedent, span = Span{line = line, column = column}})
+        pop(&indents)
+    }
+    delete(indents)
 
     append(&tokens, Token{kind = .Eof, span = Span{line = line, column = column}})
     return tokens

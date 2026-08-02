@@ -12,15 +12,21 @@ Span :: struct {
 Token_Kind :: enum {
     Eof,
     Newline,
+    Indent,
+    Dedent,
     Keyword_Show,
     Keyword_Is,
+    Keyword_If,
+    Keyword_Otherwise,
     Identifier,
+    Comparison,
     String,
     Number,
     Plus,
     Minus,
     Star,
     Slash,
+    Colon,
     LParen,
     RParen,
 }
@@ -30,6 +36,7 @@ Token :: struct {
     kind: Token_Kind,
     text: string,
     span: Span,
+    op: Comparison_Op,
 }
 
 // what operators we have in an arithmetic expression
@@ -40,10 +47,21 @@ Bin_Op :: enum {
     Div,
 }
 
-// every expression is one of these four
+// what comparison phrases we have in a condition
+Comparison_Op :: enum {
+    Equal,
+    Not_Equal,
+    Greater,
+    Less,
+    Greater_Or_Equal,
+    Less_Or_Equal,
+}
+
+// every expression is one of these five
 Expr :: union {
     Literal,
     Variable,
+    Comparison,
     Binary,
     Grouping,
 }
@@ -60,6 +78,14 @@ Literal :: struct {
 Variable :: struct {
     span: Span,
     name: string,
+}
+
+// a comparison compares two expressions with a comparison phrase
+Comparison :: struct {
+    span: Span,
+    op: Comparison_Op,
+    left: ^Expr,
+    right: ^Expr,
 }
 
 // a binary operation combines two expressions with an operator
@@ -89,10 +115,23 @@ Variable_Decl :: struct {
     expr: Expr,
 }
 
-// every statement is one of these two
+// one "if condition:" branch with its indented body
+If_Block :: struct {
+    span: Span,
+    condition: Expr,
+    body: [dynamic]Stmt,
+    // an "otherwise if ..." nests a new if as the else branch
+    else_if: ^If_Block,
+    // a plain "otherwise:" body
+    else_body: [dynamic]Stmt,
+    has_else_body: bool,
+}
+
+// every statement is one of these three
 Stmt :: union {
     Show,
     Variable_Decl,
+    If_Block,
 }
 
 // a program is a collection of statements
@@ -144,6 +183,11 @@ destroy_expr :: proc(expr: Expr) {
         }
     case Variable:
     // nothing to free, the name lives in the source text
+    case Comparison:
+        destroy_expr(e.left^)
+        destroy_expr(e.right^)
+        free(e.left)
+        free(e.right)
     case Binary:
         destroy_expr(e.left^)
         destroy_expr(e.right^)
@@ -156,17 +200,36 @@ destroy_expr :: proc(expr: Expr) {
 }
 
 // delete all of the memory allocated to the collection of statements while compilation
-destroy_program :: proc(program: ^Program) {
-    for &stmt in program.statements {
-        switch s in stmt {
+destroy_stmts :: proc(stmts: ^[dynamic]Stmt) {
+    for i in 0..<len(stmts) {
+        stmt := &stmts[i]
+        switch &s in stmt {
         case Show:
             destroy_expr(s.expr)
         case Variable_Decl:
             destroy_expr(s.expr)
             delete(s.name)
+        case If_Block:
+            destroy_stmt(&s)
         }
     }
-    delete(program.statements)
+    delete(stmts^)
+}
+
+// recursively delete an if block and everything inside it
+destroy_stmt :: proc(if_block: ^If_Block) {
+    destroy_expr(if_block.condition)
+    destroy_stmts(&if_block.body)
+    destroy_stmts(&if_block.else_body)
+    if if_block.else_if != nil {
+        destroy_stmt(if_block.else_if)
+        free(if_block.else_if)
+    }
+}
+
+// delete all of the memory allocated to the collection of statements while compilation
+destroy_program :: proc(program: ^Program) {
+    destroy_stmts(&program.statements)
 }
 
 // delete all of the memory allocated to the collection of errors while compilation

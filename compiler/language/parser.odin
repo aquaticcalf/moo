@@ -37,68 +37,197 @@ parse :: proc(source: string, path: string) -> Parse_Result {
 parse_tokens :: proc(tokens: []Token, diagnostics: ^Diagnostics) -> Program {
     program: Program
     index := 0
+    parse_block(tokens, &index, diagnostics, &program.statements)
+    return program
+}
 
-    for index < len(tokens) {
-        token := tokens[index]
-        if token.kind == .Newline {
-            index += 1
+// parse a sequence of statements; stops when a Dedent (or Eof) is reached
+parse_block :: proc(tokens: []Token, index: ^int, diagnostics: ^Diagnostics, stmts: ^[dynamic]Stmt) -> bool {
+    for index^ < len(tokens) {
+        token := tokens[index^]
+        #partial switch token.kind {
+        case .Newline:
+            index^ += 1
             continue
+        case .Eof:
+            return true
+        case .Dedent:
+            return true
+        case .Keyword_If:
+            if !parse_if_block(tokens, index, diagnostics, stmts) {
+                return false
+            }
+        case .Keyword_Otherwise:
+            reportf(diagnostics, token.span, "unexpected 'otherwise'")
+            skip_to_line_end(tokens, index)
+        case .Identifier:
+            if index^ + 1 < len(tokens) && tokens[index^ + 1].kind == .Keyword_Is {
+                if !parse_variable_decl(tokens, index, diagnostics, stmts) {
+                    return false
+                }
+            } else {
+                reportf(diagnostics, token.span, "expected 'show', 'if' or 'name is value'")
+                skip_to_line_end(tokens, index)
+            }
+        case .Keyword_Show:
+            if !parse_show(tokens, index, diagnostics, stmts) {
+                return false
+            }
+        case:
+            reportf(diagnostics, token.span, "expected a statement")
+            skip_to_line_end(tokens, index)
         }
-        if token.kind == .Eof {
+    }
+    return true
+}
+
+// skip until the end of the current logical line
+skip_to_line_end :: proc(tokens: []Token, index: ^int) {
+    for index^ < len(tokens) &&
+        tokens[index^].kind != .Newline &&
+        tokens[index^].kind != .Eof &&
+        tokens[index^].kind != .Dedent {
+        index^ += 1
+    }
+}
+
+// parse "show <expression>"
+parse_show :: proc(tokens: []Token, index: ^int, diagnostics: ^Diagnostics, stmts: ^[dynamic]Stmt) -> bool {
+    token := tokens[index^]
+    index^ += 1
+
+    expression, ok := parse_expression(tokens, index, diagnostics)
+    if !ok {
+        skip_to_line_end(tokens, index)
+        return false
+    }
+    append(stmts, Show{span = token.span, expr = expression})
+
+    if index^ < len(tokens) && tokens[index^].kind != .Newline && tokens[index^].kind != .Eof && tokens[index^].kind != .Dedent {
+        reportf(diagnostics, tokens[index^].span, "expected the line to end after show")
+        skip_to_line_end(tokens, index)
+    }
+    return true
+}
+
+// parse "name is expression"
+parse_variable_decl :: proc(tokens: []Token, index: ^int, diagnostics: ^Diagnostics, stmts: ^[dynamic]Stmt) -> bool {
+    token := tokens[index^]
+    index^ += 2 // consume the name and the 'is'
+
+    expression, ok := parse_expression(tokens, index, diagnostics)
+    if !ok {
+        skip_to_line_end(tokens, index)
+        return false
+    }
+    append(stmts, Variable_Decl{span = token.span, name = strings.clone(token.text), expr = expression})
+
+    if index^ < len(tokens) && tokens[index^].kind != .Newline && tokens[index^].kind != .Eof && tokens[index^].kind != .Dedent {
+        reportf(diagnostics, tokens[index^].span, "expected the line to end after assignment")
+        skip_to_line_end(tokens, index)
+    }
+    return true
+}
+
+// parse an "if ...: <body>" possibly followed by "otherwise" branches
+parse_if_block :: proc(tokens: []Token, index: ^int, diagnostics: ^Diagnostics, stmts: ^[dynamic]Stmt) -> bool {
+    if_token := tokens[index^]
+    index^ += 1
+
+    condition, ok := parse_expression(tokens, index, diagnostics)
+    if !ok {
+        skip_to_line_end(tokens, index)
+        return false
+    }
+
+    // the ':' that ends the condition line
+    if index^ >= len(tokens) || tokens[index^].kind != .Colon {
+        reportf(diagnostics, tokens[index^ - 1].span, "expected ':' after the if condition")
+        skip_to_line_end(tokens, index)
+        destroy_expr(condition)
+        return false
+    }
+    index^ += 1
+
+    if_block := If_Block{span = if_token.span, condition = condition}
+
+    if !parse_indented_body(tokens, index, diagnostics, &if_block.body) {
+        destroy_stmt(&if_block)
+        return false
+    }
+
+    // consume the dedent that ended the if body, if any
+    if index^ < len(tokens) && tokens[index^].kind == .Dedent {
+        index^ += 1
+    }
+
+    // an "otherwise" chain may follow at the same level.
+    // the plain "otherwise:" applies to the innermost "otherwise if" written so far.
+    current := &if_block
+    for index^ < len(tokens) && tokens[index^].kind == .Keyword_Otherwise {
+        index^ += 1
+        if index^ < len(tokens) && tokens[index^].kind == .Keyword_If {
+            // otherwise if <condition>: <body>
+            nested := new(If_Block)
+            nested.span = tokens[index^].span
+            index^ += 1
+            nested_cond, cok := parse_expression(tokens, index, diagnostics)
+            if !cok {
+                destroy_stmt(&if_block)
+                return false
+            }
+            nested.condition = nested_cond
+            if index^ >= len(tokens) || tokens[index^].kind != .Colon {
+                reportf(diagnostics, tokens[index^ - 1].span, "expected ':' after the otherwise if condition")
+                destroy_stmt(&if_block)
+                return false
+            }
+            index^ += 1
+            if !parse_indented_body(tokens, index, diagnostics, &nested.body) {
+                destroy_stmt(&if_block)
+                return false
+            }
+            if index^ < len(tokens) && tokens[index^].kind == .Dedent {
+                index^ += 1
+            }
+            current.else_if = nested
+            current = nested
+        } else {
+            // plain otherwise: <body> attaches to the innermost block
+            if index^ >= len(tokens) || tokens[index^].kind != .Colon {
+                reportf(diagnostics, tokens[index^ - 1].span, "expected ':' after 'otherwise'")
+                destroy_stmt(&if_block)
+                return false
+            }
+            index^ += 1
+            if !parse_indented_body(tokens, index, diagnostics, &current.else_body) {
+                destroy_stmt(&if_block)
+                return false
+            }
+            if index^ < len(tokens) && tokens[index^].kind == .Dedent {
+                index^ += 1
+            }
+            current.has_else_body = true
             break
-        }
-
-        // a variable declaration: name is expression
-        if token.kind == .Identifier &&
-            index + 1 < len(tokens) &&
-            tokens[index + 1].kind == .Keyword_Is {
-            index += 2
-
-            expression, ok := parse_expression(tokens, &index, diagnostics)
-            if !ok {
-                for index < len(tokens) && tokens[index].kind != .Newline && tokens[index].kind != .Eof {
-                    index += 1
-                }
-                continue
-            }
-
-            append(&program.statements, Variable_Decl{span = token.span, name = strings.clone(token.text), expr = expression})
-
-            if index < len(tokens) && tokens[index].kind != .Newline && tokens[index].kind != .Eof {
-                reportf(diagnostics, tokens[index].span, "expected the line to end after assignment")
-                for index < len(tokens) && tokens[index].kind != .Newline && tokens[index].kind != .Eof {
-                    index += 1
-                }
-            }
-            continue
-        }
-
-        if token.kind != .Keyword_Show {
-            reportf(diagnostics, token.span, "expected 'show' or 'name is value'")
-            index += 1
-            continue
-        }
-        index += 1
-
-        expression, ok := parse_expression(tokens, &index, diagnostics)
-        if !ok {
-            for index < len(tokens) && tokens[index].kind != .Newline && tokens[index].kind != .Eof {
-                index += 1
-            }
-            continue
-        }
-
-        append(&program.statements, Show{span = token.span, expr = expression})
-
-        if index < len(tokens) && tokens[index].kind != .Newline && tokens[index].kind != .Eof {
-            reportf(diagnostics, tokens[index].span, "expected the line to end after show")
-            for index < len(tokens) && tokens[index].kind != .Newline && tokens[index].kind != .Eof {
-                index += 1
-            }
         }
     }
 
-    return program
+    append(stmts, if_block)
+    return true
+}
+
+// parse the indented body of a block: expects an Indent then statements
+parse_indented_body :: proc(tokens: []Token, index: ^int, diagnostics: ^Diagnostics, body: ^[dynamic]Stmt) -> bool {
+    if index^ < len(tokens) && tokens[index^].kind == .Newline {
+        index^ += 1
+    }
+    if index^ >= len(tokens) || tokens[index^].kind != .Indent {
+        reportf(diagnostics, tokens[index^ - 1].span, "expected an indented block")
+        return false
+    }
+    index^ += 1
+    parse_block(tokens, index, diagnostics, body)
+    return true
 }
 
 // the lowest level of an expression: numbers, strings, parentheses and unary minus
@@ -206,7 +335,28 @@ parse_binary :: proc(tokens: []Token, index: ^int, diagnostics: ^Diagnostics, mi
     return left, true
 }
 
-// a full expression: everything with a value
+// a full expression: everything with a value, including a comparison
 parse_expression :: proc(tokens: []Token, index: ^int, diagnostics: ^Diagnostics) -> (Expr, bool) {
-    return parse_binary(tokens, index, diagnostics, 1)
+    left, ok := parse_binary(tokens, index, diagnostics, 1)
+    if !ok {
+        return nil, false
+    }
+
+    // a comparison: "left is <phrase> right"
+    if index^ < len(tokens) && tokens[index^].kind == .Comparison {
+        comparison := tokens[index^]
+        index^ += 1
+        right, rok := parse_expression(tokens, index, diagnostics)
+        if !rok {
+            destroy_expr(left)
+            return nil, false
+        }
+        left_node := new(Expr)
+        right_node := new(Expr)
+        left_node^ = left
+        right_node^ = right
+        return Comparison{span = comparison.span, op = comparison.op, left = left_node, right = right_node}, true
+    }
+
+    return left, true
 }
