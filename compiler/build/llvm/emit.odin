@@ -60,39 +60,85 @@ emit_program :: proc(program: language.Program) -> string {
 
     line(&builder, "; moo llvm module")
     line(&builder, "declare i32 @puts(ptr)")
+    line(&builder, "declare i32 @printf(ptr, ...)")
     line(&builder, "")
 
+    // one constant for every string that gets shown
     string_lengths: [dynamic]int
-    for show, index in program.shows {
-        bytes := decode_string(show.text)
-        append(&string_lengths, len(bytes))
+    for show in program.shows {
+        if literal, ok := show.expr.(language.Literal); ok && literal.is_string {
+            bytes := decode_string(literal.text)
+            append(&string_lengths, len(bytes))
 
-        write(&builder, fmt.aprintf(
-            "@.str.%d = private unnamed_addr constant [%d x i8] c\"",
-            index,
-            len(bytes),
-        ))
-        for value in bytes {
-            write_byte(&builder, value)
+            write(&builder, fmt.aprintf(
+                "@.str.%d = private unnamed_addr constant [%d x i8] c\"",
+                len(string_lengths) - 1,
+                len(bytes),
+            ))
+            for value in bytes {
+                write_byte(&builder, value)
+            }
+            line(&builder, "\", align 1")
+            delete(bytes)
         }
-        line(&builder, "\", align 1")
-        delete(bytes)
     }
 
+    // format string used to print integers: "%d\n"
+    line(&builder, "@.fmt.int = private unnamed_addr constant [4 x i8] c\"%d\\0A\\00\", align 1")
     line(&builder, "")
     line(&builder, "define i32 @main() {")
     line(&builder, "entry:")
-    for _, index in program.shows {
-        line(&builder, fmt.aprintf(
-            "  %%show.%d = call i32 @puts(ptr getelementptr inbounds ([%d x i8], ptr @.str.%d, i64 0, i64 0))",
-            index,
-            string_lengths[index],
-            index,
-        ))
+
+    counter := 0
+    string_index := 0
+    for show in program.shows {
+        if literal, ok := show.expr.(language.Literal); ok && literal.is_string {
+            line(&builder, fmt.aprintf(
+                "  %%show.%d = call i32 @puts(ptr getelementptr inbounds ([%d x i8], ptr @.str.%d, i64 0, i64 0))",
+                counter,
+                string_lengths[string_index],
+                string_index,
+            ))
+            string_index += 1
+            counter += 1
+        } else {
+            value := emit_expr(&builder, show.expr, &counter)
+            line(&builder, fmt.aprintf("  %%show.%d = call i32 @printf(ptr @.fmt.int, i32 %s)", counter, value))
+            counter += 1
+        }
     }
     line(&builder, "  ret i32 0")
     line(&builder, "}")
 
     delete(string_lengths)
     return strings.to_string(builder)
+}
+
+// turn an expression into an i32 llvm value, naming the results %%t.n
+emit_expr :: proc(builder: ^strings.Builder, expr: language.Expr, counter: ^int) -> string {
+    switch e in expr {
+    case language.Literal:
+        if e.is_string {
+            // a string has no numeric value, this should not be reached
+            return "0"
+        }
+        return fmt.aprintf("%d", e.value)
+    case language.Grouping:
+        return emit_expr(builder, e.inner^, counter)
+    case language.Binary:
+        left := emit_expr(builder, e.left^, counter)
+        right := emit_expr(builder, e.right^, counter)
+        operation: string
+        switch e.op {
+        case .Add: operation = "add"
+        case .Sub: operation = "sub"
+        case .Mul: operation = "mul"
+        case .Div: operation = "sdiv"
+        }
+        name := fmt.aprintf("%%t.%d", counter^)
+        counter^ += 1
+        line(builder, fmt.aprintf("  %s = %s i32 %s, %s", name, operation, left, right))
+        return name
+    }
+    return "0"
 }

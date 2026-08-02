@@ -14,6 +14,13 @@ Token_Kind :: enum {
     Newline,
     Keyword_Show,
     String,
+    Number,
+    Plus,
+    Minus,
+    Star,
+    Slash,
+    LParen,
+    RParen,
 }
 
 // a token has a kind, the actual data and it's coordinates
@@ -23,10 +30,47 @@ Token :: struct {
     span: Span,
 }
 
-// a show is a token without the kind attached to it?
-Show :: struct {
-    text: string,
+// what operators we have in an arithmetic expression
+Bin_Op :: enum {
+    Add,
+    Sub,
+    Mul,
+    Div,
+}
+
+// every expression is one of these three
+Expr :: union {
+    Literal,
+    Binary,
+    Grouping,
+}
+
+// a literal is a value written directly in the code ( a number or a string )
+Literal :: struct {
     span: Span,
+    value: i64,
+    is_string: bool,
+    text: string,
+}
+
+// a binary operation combines two expressions with an operator
+Binary :: struct {
+    span: Span,
+    op: Bin_Op,
+    left: ^Expr,
+    right: ^Expr,
+}
+
+// a grouping is an expression wrapped in parentheses
+Grouping :: struct {
+    span: Span,
+    inner: ^Expr,
+}
+
+// a show is a statement that prints an expression
+Show :: struct {
+    span: Span,
+    expr: Expr,
 }
 
 // a program is a collection of shows
@@ -69,10 +113,28 @@ has_errors :: proc(diagnostics: ^Diagnostics) -> bool {
     return len(diagnostics.errors) > 0
 }
 
+// delete all of the memory allocated to an expression tree
+destroy_expr :: proc(expr: Expr) {
+    switch e in expr {
+    case Literal:
+        if e.is_string {
+            delete(e.text)
+        }
+    case Binary:
+        destroy_expr(e.left^)
+        destroy_expr(e.right^)
+        free(e.left)
+        free(e.right)
+    case Grouping:
+        destroy_expr(e.inner^)
+        free(e.inner)
+    }
+}
+
 // delete all of the memory allocated to the collection of shows while compilation
 destroy_program :: proc(program: ^Program) {
-    for index := 0; index < len(program.shows); index += 1 {
-        delete(program.shows[index].text)
+    for &show in program.shows {
+        destroy_expr(show.expr)
     }
     delete(program.shows)
 }

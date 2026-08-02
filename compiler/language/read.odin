@@ -65,6 +65,22 @@ scan :: proc(source: string, diagnostics: ^Diagnostics) -> [dynamic]Token {
             continue
         }
 
+        if c >= '0' && c <= '9' {
+            start := offset
+            start_column := column
+            for offset < len(source) && source[offset] >= '0' && source[offset] <= '9' {
+                offset += 1
+                column += 1
+            }
+
+            append(&tokens, Token{
+                kind = .Number,
+                text = source[start:offset],
+                span = Span{line = line, column = start_column},
+            })
+            continue
+        }
+
         if c == '"' {
             start := offset
             start_column := column
@@ -93,6 +109,26 @@ scan :: proc(source: string, diagnostics: ^Diagnostics) -> [dynamic]Token {
                 reportf(diagnostics, span, "a string must end before the line ends")
             }
             append(&tokens, Token{kind = .String, text = source[start:offset], span = span})
+            continue
+        }
+
+        if c == '+' || c == '-' || c == '*' || c == '/' || c == '(' || c == ')' {
+            kind: Token_Kind
+            switch c {
+            case '+': kind = .Plus
+            case '-': kind = .Minus
+            case '*': kind = .Star
+            case '/': kind = .Slash
+            case '(': kind = .LParen
+            case ')': kind = .RParen
+            }
+            append(&tokens, Token{
+                kind = kind,
+                text = source[offset:offset + 1],
+                span = Span{line = line, column = column},
+            })
+            offset += 1
+            column += 1
             continue
         }
 
