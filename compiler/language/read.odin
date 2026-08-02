@@ -114,6 +114,17 @@ scan :: proc(source: string, diagnostics: ^Diagnostics) -> [dynamic]Token {
             continue
         }
 
+        if c == '#' {
+            // a comment runs to the end of the line
+            offset += 1
+            column += 1
+            for offset < len(source) && source[offset] != '\n' {
+                offset += 1
+                column += 1
+            }
+            continue
+        }
+
         if c == '+' || c == '-' || c == '*' || c == '/' || c == '(' || c == ')' {
             kind: Token_Kind
             switch c {
