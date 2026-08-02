@@ -11,8 +11,6 @@ RUN apt-get update \
         lld \
         llvm \
         llvm-dev \
-        lld \
-        lld-dev \
         mingw-w64 \
         tar \
     && rm -rf /var/lib/apt/lists/*
